@@ -102,6 +102,24 @@ export class HanaSecureApi implements ICredentialType {
 				'Whether workflows using these credentials may execute manually written SELECT statements',
 		},
 		{
+			displayName: 'Allow AI Tool Use',
+			name: 'allowAiTool',
+			type: 'boolean',
+			default: false,
+			description:
+				'Whether this credential may be used by the Logali HANA Guard Tool variant. Advanced SQL remains blocked for tools.',
+		},
+		{
+			displayName: 'AI Tool Row Limit',
+			name: 'aiToolMaxRows',
+			type: 'number',
+			typeOptions: { minValue: 1, maxValue: 1000 },
+			default: 100,
+			description:
+				'Credential-level maximum number of rows returned by one AI tool call, even when the node requests a higher limit',
+			displayOptions: { show: { allowAiTool: [true] } },
+		},
+		{
 			displayName: 'Connection Timeout (ms)',
 			name: 'connectionTimeout',
 			type: 'number',

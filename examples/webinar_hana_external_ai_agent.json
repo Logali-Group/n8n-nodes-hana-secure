@@ -22,7 +22,7 @@
       "parameters": {
         "promptType": "auto",
         "options": {
-          "systemMessage": "You are a governance-first SAP data analyst. Answer in Spanish and use tools before making factual claims.\n\nAvailable evidence:\n- Read Approved HANA Company Codes: bounded read of SAPHANADB.T001 for client 250.\n- Read Released OData Company Codes: released SAP business contract for company codes.\n- Get External EUR Exchange Rates: latest available external reference rates, including its date.\n- Get External Country Profile: public country context for one ISO alpha-2 country code.\n\nRules:\n1. Never invent rows, rates, dates or country facts. If a tool fails, say which evidence is unavailable.\n2. Label important claims with [HANA], [OData] or [External].\n3. HANA and OData are authoritative only for their own contracts; external APIs are context, not SAP master data.\n4. For reconciliation, compare company code, name, country and currency.\n5. For currency calculations, show the rate date, formula and rounded result. Do not describe the rate as real-time.\n6. Do not request or generate SQL. You only have fixed, bounded tools and no write capability.\n7. End decision-oriented answers with: Evidence used, Findings, Recommended next action.\n8. Keep answers under 350 words unless the user explicitly requests a detailed table.",
+          "systemMessage": "You are a governance-first SAP data analyst. Answer in Spanish and use tools before making factual claims.\n\nAvailable evidence:\n- Read Approved HANA Company Codes: direct, bounded Logali HANA Guard Tool read of SAPHANADB.T001 for client 250.\n- Read Released OData Company Codes: released SAP business contract for company codes.\n- Get External EUR Exchange Rates: latest available external reference rates, including its date.\n- Get External Country Profile: public country context for one ISO alpha-2 country code.\n\nRules:\n1. Never invent rows, rates, dates or country facts. If a tool fails, say which evidence is unavailable.\n2. Label important claims with [HANA], [OData] or [External].\n3. HANA and OData are authoritative only for their own contracts; external APIs are context, not SAP master data.\n4. For reconciliation, compare company code, name, country and currency.\n5. For currency calculations, show the rate date, formula and rounded result. Do not describe the rate as real-time.\n6. Do not request or generate SQL. You only have fixed, bounded tools and no write capability.\n7. End decision-oriented answers with: Evidence used, Findings, Recommended next action.\n8. Keep answers under 350 words unless the user explicitly requests a detailed table.",
           "returnIntermediateSteps": true,
           "enableStreaming": true,
           "maxIterations": 6
@@ -61,27 +61,22 @@
     },
     {
       "parameters": {
-        "source": "database",
-        "description": "Read at most ten approved company-code rows from SAP HANA table T001 for client 250. Use for internal company code, name, city, country and currency facts. This tool cannot accept SQL and cannot write.",
-        "workflowId": {
-          "__rl": true,
-          "value": "REEMPLAZAR_SUBWORKFLOW_ID",
-          "mode": "list",
-          "cachedResultName": "SWF · HANA Guard · Get company codes"
-        },
-        "workflowInputs": {
-          "mappingMode": "defineBelow",
-          "value": {},
-          "matchingColumns": [],
-          "schema": [],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        }
+        "descriptionType": "manual",
+        "toolDescription": "Read at most ten approved company-code rows from SAP HANA table T001 for client 250. Use for internal company code, name, city, country and currency facts. This governed tool cannot accept SQL and cannot write.",
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SAPHANADB",
+        "objectName": "T001",
+        "columns": "MANDT,BUKRS,BUTXT,ORT01,LAND1,WAERS",
+        "filters": { "values": [{ "column": "MANDT", "operator": "eq", "value": "250" }] },
+        "orderBy": { "values": [{ "column": "BUKRS", "direction": "ASC" }] },
+        "limit": 10,
+        "includeMetadata": true
       },
       "id": "hana-company-codes-tool",
       "name": "Read Approved HANA Company Codes",
-      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
-      "typeVersion": 2.2,
+      "type": "n8n-nodes-hana-secure.hanaSecureTool",
+      "typeVersion": 1,
       "position": [-40, 300]
     },
     {
@@ -150,7 +145,7 @@
     },
     {
       "parameters": {
-        "content": "## Governed agent: internal facts + external evidence\n\n**Internal source** · fixed HANA sub-workflow over `T001`, client `250`, ten rows, no SQL parameter.\n\n**Released contract** · `API_COMPANYCODE_SRV` for reconciliation.\n\n**External context** · dated EUR reference rates and public country profiles. External data enriches the answer but never becomes SAP master data.\n\n### Webinar questions\n1. Which approved company codes use a currency other than EUR?\n2. Convert EUR 10,000 to those currencies using the latest available reference date.\n3. Compare HANA and OData for company codes 1010 and 1110.\n4. Add public country context and recommend one control for the finance team.\n\nThe agent has no generic `run_sql`, no arbitrary URL tool and no write operation.",
+        "content": "## Governed agent: internal facts + external evidence\n\n**Internal source** · Logali HANA Guard connected directly as an AI Tool over `T001`, client `250`, ten rows, no SQL parameter.\n\n**Released contract** · `API_COMPANYCODE_SRV` for reconciliation.\n\n**External context** · dated EUR reference rates and public country profiles. External data enriches the answer but never becomes SAP master data.\n\n### Webinar questions\n1. Which approved company codes use a currency other than EUR?\n2. Convert EUR 10,000 to those currencies using the latest available reference date.\n3. Compare HANA and OData for company codes 1010 and 1110.\n4. Add public country context and recommend one control for the finance team.\n\nThe HANA Tool requires credential opt-in, has a credential-level row cap, and always blocks SQL (Advanced). The agent has no arbitrary URL tool and no write operation.",
         "height": 400,
         "width": 760,
         "color": 4

@@ -10,6 +10,8 @@ export interface HanaCredentials {
 	ca?: string;
 	allowedSchemas?: string;
 	allowAdvancedSql: boolean;
+	allowAiTool?: boolean;
+	aiToolMaxRows?: number;
 	connectionTimeout: number;
 	queryTimeout: number;
 }

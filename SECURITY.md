@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest published minor version receives security fixes. Version `0.2.0` is a release
+Only the latest published minor version receives security fixes. Version `0.3.0` is a release
 candidate and must be tested in a non-production, self-hosted n8n instance until publication.
 
 ## Reporting a vulnerability
@@ -32,7 +32,9 @@ Logali HANA Guard is designed for read-only automation. Its application controls
 - literal catalog-prefix filtering with wildcard escaping;
 - credential redaction in driver error messages;
 - advanced SQL disabled at credential level by default;
-- no AI-tool exposure in version 1.
+- separate credential opt-in for AI Tool use;
+- credential-level result cap for every AI Tool call;
+- advanced SQL blocked unconditionally in the AI Tool variant.
 
 The controls do not turn an over-privileged database account into a safe account. The HANA user
 must independently lack write, DDL, procedure-execution, user-management, and administrative
@@ -64,10 +66,16 @@ operations.
 
 ## MCP and AI tools
 
-The node is intentionally not marked `usableAsTool`. If an MCP server or AI agent needs HANA data,
-expose fixed sub-workflows with approved objects, columns, filters, and limits. Never expose a
-generic SQL field as an MCP tool. Protect the MCP endpoint with authentication and retain the
-database user's least-privilege grants as the final boundary.
+Version `0.3.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
+generated variant refuses to run unless **Allow AI Tool Use** is enabled in the credential. It
+supports only Connection, Catalog, and structured Row operations, applies the credential-level
+Tool row cap, and rejects SQL (Advanced) unconditionally.
+
+Configure the Tool with fixed approved schemas, objects, columns, and limits. If a model must
+supply a value, expose only a narrowly described filter value—not a schema, table, column list, or
+SQL statement. For MCP, prefer fixed sub-workflows with the same approved projections and limits.
+Protect MCP endpoints with authentication and retain the HANA user's least-privilege grants as the
+final boundary.
 
 ## Write operations
 

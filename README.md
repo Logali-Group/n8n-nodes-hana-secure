@@ -6,7 +6,8 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: release candidate `0.2.3`. Connection, catalog, metadata, and guarded structured reads
+> Status: release candidate `0.3.0`. Connection, catalog, metadata, guarded structured reads, and
+> the credential-gated AI Tool variant
 > have been tested against SAP HANA `2.00.088`. The package has not yet been published to npm.
 
 ## Why this node exists
@@ -26,7 +27,10 @@ This package:
 - escapes catalog-name wildcards and supports a literal object-name prefix;
 - enables TLS and certificate validation by default;
 - keeps manually written SQL disabled by default;
-- is intentionally unavailable as an n8n AI tool in this release.
+- can be attached directly to an n8n AI Agent as **Logali HANA Guard Tool**;
+- requires a separate credential opt-in for AI Tool use;
+- blocks advanced SQL in the Tool variant even when normal workflows may use it;
+- caps every Tool response with a credential-level maximum (100 rows by default).
 
 These controls are defense in depth. A least-privilege HANA user remains the primary security
 boundary.
@@ -85,12 +89,12 @@ The package isn't on the npm registry yet, so it can't be installed by name from
 the development container name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.2.3.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.3.0.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.2.3.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.3.0.tgz
 exit
 
 docker restart <n8n-container>
@@ -147,6 +151,8 @@ Create a **Logali HANA Guard API** credential with:
 | Custom CA Certificate | Optional PEM CA for a private certificate authority |
 | Allowed Schemas | Optional comma-separated schema allowlist |
 | Allow Advanced Read-Only SQL | Opt-in switch for trusted workflows; disabled by default |
+| Allow AI Tool Use | Separate opt-in required before an AI Agent can call the Tool variant |
+| AI Tool Row Limit | Credential-level cap for each Tool call; 100 by default, maximum 1,000 |
 | Connection / Query Timeout | Upper bounds for connection and query execution |
 
 Use **Test** in the credential dialog, or the node's **Connection → Test Connection** operation.
@@ -213,6 +219,27 @@ WHERE "COMPANY_CODE" = ? AND "FISCAL_YEAR" = ?
 The guard is not a substitute for database permissions. Enable advanced SQL only for trusted
 workflow editors.
 
+## AI Agent Tool
+
+Version `0.3.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
+AI Agent's **Tool** connector and configure one approved operation exactly as you would configure
+the normal node.
+
+Recommended pattern:
+
+1. Use a HANA account with exact `SELECT` grants and an **Allowed Schemas** allowlist.
+2. Enable **Allow AI Tool Use** and set a conservative **AI Tool Row Limit** in the credential.
+3. Choose **Row → Select Rows** or **Aggregate Rows** in the Tool node.
+4. Fix the schema, table/view, columns, sorting, and ordinary filters in the workflow.
+5. Let the model supply only narrowly described filter values when needed; keep identifiers fixed.
+6. Give the Tool a specific description that says what data it returns and when to call it.
+
+The Tool variant supports Connection, Catalog, and structured Row operations. **SQL (Advanced)**
+is rejected at runtime for every AI Tool call, even if the same credential permits advanced SQL
+in a normal workflow. The credential-level Tool limit also overrides a larger limit selected in
+the node. This prevents a workflow editor or imported template from silently widening the agent's
+database surface.
+
 ## Example workflows
 
 [`examples/415_hana_secure_readonly.json`](examples/415_hana_secure_readonly.json) contains a
@@ -227,6 +254,9 @@ The webinar examples are also sanitized:
   pre-approved demo objects through `SYS.M_TABLES`, without reading business rows;
 - [`examples/webinar_data_samples.json`](examples/webinar_data_samples.json) contains the bounded
   T001, VBAK, and ACDOCA reads to run only after the dedicated account receives reviewed grants.
+- [`examples/webinar_hana_external_ai_agent.json`](examples/webinar_hana_external_ai_agent.json)
+  attaches Logali HANA Guard directly to an AI Agent and combines its bounded HANA read with
+  released OData and external evidence tools.
 
 [`sql/setup_webinar_readonly.sql`](sql/setup_webinar_readonly.sql) is a reviewable lab template
 for the exact role and object grants. It contains placeholders only and must be executed by the
@@ -234,8 +264,8 @@ object owner or an administrator with the required grant option.
 
 ## MCP pattern
 
-The node is deliberately **not** exposed directly as an unrestricted AI tool. For MCP, wrap fixed
-sub-workflows behind n8n's **MCP Server Trigger** and publish narrow tools such as:
+Direct AI Tool support does not turn the node into a generic SQL agent. For MCP, continue to wrap
+fixed sub-workflows behind n8n's **MCP Server Trigger** and publish narrow tools such as:
 
 - `get_company_codes` — fixed object, fixed columns, fixed row limit;
 - `get_recent_sales_orders` — approved projection and deterministic sorting;

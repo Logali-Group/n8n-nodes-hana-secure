@@ -27,16 +27,17 @@ import {
 	validateAdvancedSelect,
 } from './sqlSafety';
 import type { Filter, HanaCredentials, OrderBy } from './types';
+import { resolveAiToolPolicy } from './toolPolicy';
 
 const MAX_ROW_LIMIT = 1000;
 
-function rowLimit(value: number): number {
+function rowLimit(value: number, policyMaximum = MAX_ROW_LIMIT): number {
 	if (!Number.isInteger(value) || value < 1 || value > MAX_ROW_LIMIT) {
 		throw new OperationalError(
 			`Row limit must be an integer between 1 and ${MAX_ROW_LIMIT}.`,
 		);
 	}
-	return value;
+	return Math.min(value, policyMaximum);
 }
 
 function valuesFromCollection<T>(value: unknown): T[] {
@@ -71,6 +72,7 @@ async function executeCatalogOperation(
 	itemIndex: number,
 	operation: string,
 	credentials: HanaCredentials,
+	aiToolMaxRows?: number,
 ): Promise<Record<string, unknown>[]> {
 	const allowlist = parseAllowedSchemas(credentials.allowedSchemas);
 
@@ -78,9 +80,12 @@ async function executeCatalogOperation(
 		const rows = await session.query(
 			`SELECT "SCHEMA_NAME" FROM "SYS"."SCHEMAS" WHERE "SCHEMA_NAME" <> 'SYS' AND "SCHEMA_NAME" NOT LIKE '\\_SYS\\_%' ESCAPE '\\' ORDER BY "SCHEMA_NAME"`,
 		);
-		return allowlist.length === 0
+		const visibleRows = allowlist.length === 0
 			? rows
 			: rows.filter((row) => allowlist.includes(String(row.SCHEMA_NAME).toUpperCase()));
+		return aiToolMaxRows === undefined
+			? visibleRows
+			: addResultMetadata(visibleRows, operation, aiToolMaxRows, true);
 	}
 
 	const schema = assertSchemaAllowed(
@@ -91,6 +96,7 @@ async function executeCatalogOperation(
 		const prefix = context.getNodeParameter('objectNamePrefix', itemIndex, '') as string;
 		const limit = rowLimit(
 			context.getNodeParameter('catalogLimit', itemIndex, 100) as number,
+			aiToolMaxRows,
 		);
 		const escapedPrefix = prefix.replace(/[\\%_]/g, '\\$&');
 		const rows = await session.query(
@@ -113,13 +119,16 @@ LIMIT ${limit + 1}`,
 	);
 	const catalogView = objectType === 'view' ? 'VIEW_COLUMNS' : 'TABLE_COLUMNS';
 	const objectColumn = objectType === 'view' ? 'VIEW_NAME' : 'TABLE_NAME';
-	return await session.query(
+	const rows = await session.query(
 		`SELECT "COLUMN_NAME", "POSITION", "DATA_TYPE_NAME", "LENGTH", "SCALE", "IS_NULLABLE"
 FROM "SYS"."${catalogView}"
 WHERE "SCHEMA_NAME" = ? AND "${objectColumn}" = ?
 ORDER BY "POSITION"`,
 		[schema, objectName],
 	);
+	return aiToolMaxRows === undefined
+		? rows
+		: addResultMetadata(rows, operation, aiToolMaxRows, true);
 }
 
 async function executeRowsOperation(
@@ -128,6 +137,7 @@ async function executeRowsOperation(
 	itemIndex: number,
 	operation: string,
 	credentials: HanaCredentials,
+	aiToolMaxRows?: number,
 ): Promise<Record<string, unknown>[]> {
 	const allowlist = parseAllowedSchemas(credentials.allowedSchemas);
 	const schema = assertSchemaAllowed(
@@ -142,7 +152,10 @@ async function executeRowsOperation(
 		context.getNodeParameter('filters', itemIndex, {}),
 	);
 	const where = buildWhereClause(filters);
-	const limit = rowLimit(context.getNodeParameter('limit', itemIndex) as number);
+	const limit = rowLimit(
+		context.getNodeParameter('limit', itemIndex) as number,
+		aiToolMaxRows,
+	);
 	const tableReference = `${quoteIdentifier(schema)}.${quoteIdentifier(objectName)}`;
 
 	if (operation === 'select') {
@@ -231,8 +244,6 @@ async function executeAdvancedSql(
 	return addResultMetadata(rows, 'executeSelect', limit, includeMetadata);
 }
 
-// Intentionally not usable as an AI tool until separate policy controls are implemented.
-// eslint-disable-next-line @n8n/community-nodes/node-usable-as-tool
 export class HanaSecure implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Logali HANA Guard',
@@ -245,6 +256,12 @@ export class HanaSecure implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
 		description: 'Read SAP HANA data with explicit security guardrails by Logali Group',
+		usableAsTool: {
+			replacements: {
+				description:
+					'Give an AI agent governed, bounded access to approved SAP HANA reads; advanced SQL is always blocked',
+			},
+		},
 		defaults: { name: 'Logali HANA Guard' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
@@ -261,7 +278,7 @@ export class HanaSecure implements INodeType {
 					{ name: 'Connection', value: 'connection' },
 					{ name: 'Catalog', value: 'catalog' },
 					{ name: 'Row', value: 'rows' },
-					{ name: 'SQL (Advanced)', value: 'sql' },
+					{ name: 'SQL (Advanced — Workflow Only)', value: 'sql' },
 				],
 				default: 'connection',
 			},
@@ -645,6 +662,11 @@ export class HanaSecure implements INodeType {
 					'hanaSecureApi',
 					itemIndex,
 				)) as unknown as HanaCredentials;
+				const aiToolPolicy = resolveAiToolPolicy(
+					this.getNode().type,
+					resource,
+					credentials,
+				);
 
 				const result = await withHanaClient(credentials, async (session) => {
 					if (resource === 'connection') {
@@ -664,6 +686,7 @@ export class HanaSecure implements INodeType {
 							itemIndex,
 							operation,
 							credentials,
+							aiToolPolicy.maxRows,
 						);
 					}
 					if (resource === 'rows') {
@@ -673,6 +696,7 @@ export class HanaSecure implements INodeType {
 							itemIndex,
 							operation,
 							credentials,
+							aiToolPolicy.maxRows,
 						);
 					}
 					return await executeAdvancedSql(this, session, itemIndex, credentials);

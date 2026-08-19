@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-08-19
+
+### Added
+
+- Generate **Logali HANA Guard Tool** as a native n8n AI Agent Tool from the existing node.
+- Add an explicit credential switch for AI Tool use and a credential-level Tool row cap.
+- Add policy tests for normal-node compatibility, explicit opt-in, default limits, and SQL denial.
+
+### Security
+
+- Reject SQL (Advanced) unconditionally in the AI Tool variant, even when a normal workflow may
+  use the same credential for guarded read-only SQL.
+- Keep Connection, Catalog, Select Rows, and Aggregate Rows available while preserving schema
+  allowlists, prepared filters, timeouts, database grants, and enforced result limits.
+
 ## [0.2.3] - 2026-08-19
 
 ### Fixed
