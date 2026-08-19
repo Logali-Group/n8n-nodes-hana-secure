@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.3] - 2026-08-19
+
+### Fixed
+
+- Preserve the official Logali mark without redrawing, moving, or cutting its geometry.
+- Move the database symbol into a separate lower-right badge so the product purpose remains visible
+  without altering the company identity.
+
 ## [0.2.2] - 2026-08-19
 
 ### Fixed

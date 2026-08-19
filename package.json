@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-hana-secure",
-	"version": "0.2.2",
+	"version": "0.2.3",
 	"description": "Logali HANA Guard: security-first SAP HANA community node for self-hosted n8n",
 	"license": "MIT",
 	"homepage": "https://github.com/logali/n8n-nodes-hana-secure#readme",
@@ -50,6 +50,8 @@
 		"dist/nodes/HanaSecure/hanaSecure.dark.svg",
 		"dist/nodes/HanaSecure/logaliHanaGuard-v022.svg",
 		"dist/nodes/HanaSecure/logaliHanaGuard-v022.dark.svg",
+		"dist/nodes/HanaSecure/logaliHanaGuard-v023.svg",
+		"dist/nodes/HanaSecure/logaliHanaGuard-v023.dark.svg",
 		"dist/THIRD_PARTY_HDB_APACHE-2.0.txt",
 		"assets",
 		"examples",

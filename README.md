@@ -6,7 +6,7 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: release candidate `0.2.2`. Connection, catalog, metadata, and guarded structured reads
+> Status: release candidate `0.2.3`. Connection, catalog, metadata, and guarded structured reads
 > have been tested against SAP HANA `2.00.088`. The package has not yet been published to npm.
 
 ## Why this node exists
@@ -85,12 +85,12 @@ The package isn't on the npm registry yet, so it can't be installed by name from
 the development container name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.2.2.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.2.3.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.2.2.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.2.3.tgz
 exit
 
 docker restart <n8n-container>
