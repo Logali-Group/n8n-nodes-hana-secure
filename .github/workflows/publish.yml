@@ -1,0 +1,73 @@
+# Publishes this n8n community node package to npm on every version tag push.
+#
+# Publishes from a public GitHub repository through npm Trusted Publishing.
+# OIDC avoids long-lived npm tokens and automatically produces provenance.
+#
+# ─── ONE-TIME SETUP ────────────────────────────────────────────────────────────
+#
+# OIDC Trusted Publishing (no long-lived secrets):
+#   1. Log in to npmjs.com and open your package's settings.
+#   2. Under "Publish access" → "Trusted Publishers", click "Add a publisher".
+#   3. Select GitHub Actions and fill in:
+#        Repository owner: <your-github-username-or-org>
+#        Repository name:  <your-repo-name>
+#        Workflow name:    publish.yml
+#        Environment:      (leave blank unless you use GitHub Environments)
+#   4. Allow `npm publish` for the trusted publisher.
+#
+# ─── TAG CONVENTION ────────────────────────────────────────────────────────────
+#
+# This workflow triggers on tags matching "*.*.*" (e.g. 0.2.0).
+# If you prefer tags with a "v" prefix (e.g. v0.2.0), change the filter to:
+#   tags: ['v*.*.*']
+#
+# ─── RELEASE PROCESS ───────────────────────────────────────────────────────────
+#
+# Update the version and changelog in a reviewed pull request, then push the
+# matching version tag. The workflow below performs a non-interactive publish.
+
+name: Publish
+
+on:
+  push:
+    tags:
+      # Matches 0.1.0, 1.2.3, 2.0.0-rc.1, etc.
+      # See "TAG CONVENTION" above if you prefer tags with a "v" prefix.
+      - '*.*.*'
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required to mint an OIDC token for npm provenance attestation.
+      id-token: write
+      # Scoped down from the default (write) for least-privilege publishing.
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.14.0'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Set up npm with OIDC support
+        run: npm install --global npm@11.5.1
+
+      - name: Install dependencies
+        run: 'npm ci'
+
+      - name: Verify tag matches package version
+        run: |
+          test "${GITHUB_REF_NAME}" = "$(node -p 'require("./package.json").version')"
+
+      - name: Test
+        run: npm test
+
+      - name: Publish
+        run: npm publish --access public

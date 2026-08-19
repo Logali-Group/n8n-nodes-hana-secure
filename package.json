@@ -1,0 +1,85 @@
+{
+	"name": "n8n-nodes-hana-secure",
+	"version": "0.2.0",
+	"description": "Logali HANA Guard: security-first SAP HANA community node for self-hosted n8n",
+	"license": "MIT",
+	"homepage": "https://github.com/logali/n8n-nodes-hana-secure#readme",
+	"keywords": [
+		"n8n-community-node-package",
+		"n8n",
+		"sap",
+		"hana",
+		"database",
+		"sql"
+	],
+	"author": {
+		"name": "Logali Group",
+		"email": "admin@logaligroup.com",
+		"url": "https://logaligroup.com"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/logali/n8n-nodes-hana-secure.git"
+	},
+	"bugs": {
+		"url": "https://github.com/logali/n8n-nodes-hana-secure/issues"
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"build": "n8n-node build && node scripts/bundle-node.mjs",
+		"build:watch": "tsc --watch",
+		"dev": "n8n-node dev",
+		"lint": "n8n-node lint",
+		"lint:fix": "n8n-node lint --fix",
+		"test": "tsx --test test/**/*.test.ts",
+		"release": "n8n-node release",
+		"prepublishOnly": "n8n-node prerelease"
+	},
+	"files": [
+		"dist/credentials",
+		"dist/nodes/HanaSecure/HanaSecure.node.d.ts",
+		"dist/nodes/HanaSecure/HanaSecure.node.js",
+		"dist/nodes/HanaSecure/HanaSecure.node.js.map",
+		"dist/nodes/HanaSecure/HanaSecure.node.json",
+		"dist/nodes/HanaSecure/hanaSecure.svg",
+		"dist/nodes/HanaSecure/hanaSecure.dark.svg",
+		"dist/THIRD_PARTY_HDB_APACHE-2.0.txt",
+		"assets",
+		"examples",
+		"sql",
+		"CHANGELOG.md",
+		"CONTRIBUTING.md",
+		"LICENSE.md",
+		"README.md",
+		"SECURITY.md",
+		"THIRD_PARTY_NOTICES.md"
+	],
+	"n8n": {
+		"n8nNodesApiVersion": 1,
+		"strict": false,
+		"credentials": [
+			"dist/credentials/HanaSecureApi.credentials.js"
+		],
+		"nodes": [
+			"dist/nodes/HanaSecure/HanaSecure.node.js"
+		]
+	},
+	"devDependencies": {
+		"@n8n/node-cli": "0.41.2",
+		"esbuild": "0.25.8",
+		"eslint": "9.32.0",
+		"hdb": "2.27.1",
+		"prettier": "3.6.2",
+		"release-it": "^19.0.4",
+		"tsx": "4.20.6",
+		"typescript": "5.9.2"
+	},
+	"peerDependencies": {
+		"n8n-workflow": "*"
+	}
+}

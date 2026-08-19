@@ -1,0 +1,109 @@
+{
+  "name": "Webinar · Logali HANA Guard · MCP server",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "logali-hana-guard",
+        "authentication": "bearerAuth"
+      },
+      "id": "mcp-server-trigger",
+      "name": "MCP Server Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "description": "Devuelve un máximo de 10 sociedades desde una consulta HANA aprobada y de solo lectura.",
+        "workflowId": {
+          "__rl": true,
+          "value": "HanaGuardTool001",
+          "mode": "list",
+          "cachedResultName": "SWF · HANA Guard · Get company codes"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "tool-company-codes",
+      "name": "tool: get_company_codes",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [-260, 240]
+    },
+    {
+      "parameters": {
+        "description": "Devuelve un máximo de 10 pedidos de venta recientes desde una consulta HANA aprobada y de solo lectura.",
+        "workflowId": {
+          "__rl": true,
+          "value": "HanaGuardTool002",
+          "mode": "list",
+          "cachedResultName": "SWF · HANA Guard · Get recent sales orders"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "tool-sales-orders",
+      "name": "tool: get_recent_sales_orders",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [0, 240]
+    },
+    {
+      "parameters": {
+        "description": "Devuelve una muestra contable limitada para la sociedad 1010 y el ejercicio 2025 desde HANA, sin aceptar SQL del agente.",
+        "workflowId": {
+          "__rl": true,
+          "value": "HanaGuardTool003",
+          "mode": "list",
+          "cachedResultName": "SWF · HANA Guard · Get ledger sample"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "tool-ledger-sample",
+      "name": "tool: get_ledger_sample",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [260, 240]
+    },
+    {
+      "parameters": {
+        "content": "## MCP contract · no generic SQL\n\nThe MCP client can discover only three fixed tools. Each tool points to a sub-workflow with an approved table, selected columns, deterministic filters, and a hard row limit.\n\nBefore activation:\n1. Attach the dedicated `N8N_WEBINAR_RO` HANA credential to each sub-workflow.\n2. Attach a Bearer Auth credential to the MCP Server Trigger.\n3. Execute each sub-workflow and verify the bounded response.\n4. Activate the server only for the demonstration window.",
+        "height": 320,
+        "width": 760
+      },
+      "id": "mcp-contract",
+      "name": "MCP Security Contract",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-380, -460]
+    }
+  ],
+  "connections": {
+    "tool: get_company_codes": { "ai_tool": [[{ "node": "MCP Server Trigger", "type": "ai_tool", "index": 0 }]] },
+    "tool: get_recent_sales_orders": { "ai_tool": [[{ "node": "MCP Server Trigger", "type": "ai_tool", "index": 0 }]] },
+    "tool: get_ledger_sample": { "ai_tool": [[{ "node": "MCP Server Trigger", "type": "ai_tool", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1" },
+  "active": false,
+  "tags": []
+}

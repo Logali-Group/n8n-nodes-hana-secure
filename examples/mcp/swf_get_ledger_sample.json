@@ -1,0 +1,61 @@
+{
+  "name": "SWF · HANA Guard · Get ledger sample",
+  "nodes": [
+    {
+      "parameters": { "inputSource": "passthrough" },
+      "id": "subworkflow-trigger",
+      "name": "When Called as a Tool",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-360, 0]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SAPHANADB",
+        "objectName": "ACDOCA",
+        "columns": "RCLNT,RBUKRS,GJAHR,BELNR,DOCLN,RACCT,HSL,RHCUR",
+        "filters": {
+          "values": [
+            { "column": "RBUKRS", "operator": "eq", "value": "1010" },
+            { "column": "GJAHR", "operator": "eq", "value": "2025" }
+          ]
+        },
+        "orderBy": {
+          "values": [
+            { "column": "BELNR", "direction": "ASC" },
+            { "column": "DOCLN", "direction": "ASC" }
+          ]
+        },
+        "limit": 10,
+        "includeMetadata": true
+      },
+      "id": "hana-ledger-sample",
+      "name": "Read Approved Ledger Sample",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-80, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const rows = $input.all().map((item) => item.json);\nreturn [{ json: { source: 'SAPHANADB.ACDOCA', companyCode: '1010', fiscalYear: '2025', count: rows.length, ledgerLines: rows } }];"
+      },
+      "id": "aggregate-response",
+      "name": "Return Bounded Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    }
+  ],
+  "connections": {
+    "When Called as a Tool": { "main": [[{ "node": "Read Approved Ledger Sample", "type": "main", "index": 0 }]] },
+    "Read Approved Ledger Sample": { "main": [[{ "node": "Return Bounded Result", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "callerPolicy": "workflowsFromSameOwner", "executionTimeout": 30 },
+  "active": false,
+  "tags": []
+}

@@ -1,0 +1,66 @@
+{
+  "name": "Webinar · Logali HANA Guard · Discover visible schemas",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run Catalog Discovery",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-420, 0]
+    },
+    {
+      "parameters": {
+        "resource": "connection",
+        "operation": "testConnection"
+      },
+      "id": "hana-connection",
+      "name": "Verify HANA Session",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-140, 0],
+      "notes": "Attach a dedicated read-only HANA Secure credential. Do not embed hosts, users, passwords, or certificates in the workflow."
+    },
+    {
+      "parameters": {
+        "resource": "catalog",
+        "operation": "listSchemas"
+      },
+      "id": "hana-schemas",
+      "name": "List Visible Schemas",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [140, 0],
+      "notes": "The credential schema allowlist restricts this result in the final webinar setup."
+    },
+    {
+      "parameters": {
+        "content": "## Catalog discovery · read only\n\n1. Verify the session.\n2. List visible non-system schemas.\n3. Choose only a training or explicitly approved schema.\n4. Never browse arbitrary business tables with an administrator account.\n\nPublic copies contain no credential ID or endpoint.",
+        "height": 260,
+        "width": 620
+      },
+      "id": "security-note",
+      "name": "Read-only Contract",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-420, -360]
+    }
+  ],
+  "connections": {
+    "Run Catalog Discovery": {
+      "main": [[{"node": "Verify HANA Session", "type": "main", "index": 0}]]
+    },
+    "Verify HANA Session": {
+      "main": [[{"node": "List Visible Schemas", "type": "main", "index": 0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "executionTimeout": 60
+  },
+  "active": false,
+  "tags": []
+}

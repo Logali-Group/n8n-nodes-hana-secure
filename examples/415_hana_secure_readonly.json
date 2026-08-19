@@ -1,0 +1,77 @@
+{
+  "name": "415 - HANA Secure - Read-only starter",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "TRAINING",
+        "objectName": "GL_ITEMS",
+        "columns": "COMPANY_CODE,FISCAL_YEAR,ACCOUNT,AMOUNT,CURRENCY",
+        "filters": {
+          "values": [
+            {
+              "column": "COMPANY_CODE",
+              "operator": "eq",
+              "value": "1010"
+            }
+          ]
+        },
+        "orderBy": {
+          "values": [
+            {
+              "column": "FISCAL_YEAR",
+              "direction": "DESC"
+            }
+          ]
+        },
+        "limit": 50,
+        "includeMetadata": true
+      },
+      "id": "hana-secure-read",
+      "name": "Read training rows",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "content": "Attach your own HANA Secure credential. Replace TRAINING and GL_ITEMS with an allowed training schema and view. No credential, host, or internal identifier is embedded in this workflow.",
+        "height": 180,
+        "width": 420
+      },
+      "id": "training-note",
+      "name": "Setup note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [160, -260]
+    }
+  ],
+  "connections": {
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Read training rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "tags": []
+}

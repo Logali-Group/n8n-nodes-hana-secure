@@ -1,0 +1,152 @@
+{
+  "name": "Webinar · Logali HANA Guard · Compare HANA with OData",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run Safe Samples",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-520, 40]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SAPHANADB",
+        "objectName": "T001",
+        "columns": "MANDT,BUKRS,BUTXT,ORT01,LAND1,WAERS",
+        "filters": {},
+        "orderBy": {
+          "values": [
+            {
+              "column": "BUKRS",
+              "direction": "ASC"
+            }
+          ]
+        },
+        "limit": 10,
+        "includeMetadata": true
+      },
+      "id": "hana-company-codes",
+      "name": "Read Company Codes from T001",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-160, -120],
+      "notes": "Compare this governed SQL read with API_COMPANYCODE_SRV. Attach a dedicated read-only credential restricted to SAPHANADB."
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SAPHANADB",
+        "objectName": "VBAK",
+        "columns": "MANDT,VBELN,ERDAT,AUART,VKORG,VTWEG,SPART,NETWR,WAERK",
+        "filters": {},
+        "orderBy": {
+          "values": [
+            {
+              "column": "ERDAT",
+              "direction": "DESC"
+            }
+          ]
+        },
+        "limit": 10,
+        "includeMetadata": true
+      },
+      "id": "hana-sales-orders",
+      "name": "Read Recent Sales Orders from VBAK",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-160, 40],
+      "notes": "Technical comparison sample. For production business integrations, prefer a released API or a governed projection view."
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SAPHANADB",
+        "objectName": "ACDOCA",
+        "columns": "RCLNT,RBUKRS,GJAHR,BELNR,DOCLN,RACCT,HSL,RHCUR",
+        "filters": {
+          "values": [
+            {
+              "column": "RBUKRS",
+              "operator": "eq",
+              "value": "1010"
+            },
+            {
+              "column": "GJAHR",
+              "operator": "eq",
+              "value": "2025"
+            }
+          ]
+        },
+        "orderBy": {
+          "values": [
+            {
+              "column": "BELNR",
+              "direction": "ASC"
+            },
+            {
+              "column": "DOCLN",
+              "direction": "ASC"
+            }
+          ]
+        },
+        "limit": 10,
+        "includeMetadata": true
+      },
+      "id": "hana-ledger-lines",
+      "name": "Read Ledger Sample from ACDOCA",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-160, 200],
+      "notes": "Compare the result shape and semantics with API_GLACCOUNTLINEITEM. Keep the company code, year, selected columns, and row limit explicit."
+    },
+    {
+      "parameters": {
+        "content": "## Direct HANA versus OData\n\n- **T001:** compact master-data read versus `API_COMPANYCODE_SRV`.\n- **VBAK:** technical table read versus a released sales-order API or CDS projection.\n- **ACDOCA:** tightly filtered ledger sample versus `API_GLACCOUNTLINEITEM`.\n\nDirect SQL is useful for controlled reads, reconciliation, diagnostics, and private reporting. Business writes stay behind released APIs, BAPIs, CAP services, or stored procedures over owned staging tables.\n\nPublic copies contain no credential, endpoint, or administrator user.",
+        "height": 330,
+        "width": 760
+      },
+      "id": "comparison-note",
+      "name": "Decision Guide",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-520, -520]
+    }
+  ],
+  "connections": {
+    "Run Safe Samples": {
+      "main": [
+        [
+          {
+            "node": "Read Company Codes from T001",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Recent Sales Orders from VBAK",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Ledger Sample from ACDOCA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "executionTimeout": 60
+  },
+  "active": false,
+  "tags": []
+}

@@ -1,0 +1,51 @@
+{
+  "name": "SWF · HANA Guard · Get company codes",
+  "nodes": [
+    {
+      "parameters": { "inputSource": "passthrough" },
+      "id": "subworkflow-trigger",
+      "name": "When Called as a Tool",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [-360, 0]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SAPHANADB",
+        "objectName": "T001",
+        "columns": "MANDT,BUKRS,BUTXT,ORT01,LAND1,WAERS",
+        "filters": {},
+        "orderBy": { "values": [{ "column": "BUKRS", "direction": "ASC" }] },
+        "limit": 10,
+        "includeMetadata": true
+      },
+      "id": "hana-company-codes",
+      "name": "Read Approved Company Codes",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-80, 0]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const rows = $input.all().map((item) => item.json);\nreturn [{ json: { source: 'SAPHANADB.T001', count: rows.length, companyCodes: rows } }];"
+      },
+      "id": "aggregate-response",
+      "name": "Return Bounded Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 0]
+    }
+  ],
+  "connections": {
+    "When Called as a Tool": { "main": [[{ "node": "Read Approved Company Codes", "type": "main", "index": 0 }]] },
+    "Read Approved Company Codes": { "main": [[{ "node": "Return Bounded Result", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "settings": { "executionOrder": "v1", "callerPolicy": "workflowsFromSameOwner", "executionTimeout": 30 },
+  "active": false,
+  "tags": []
+}

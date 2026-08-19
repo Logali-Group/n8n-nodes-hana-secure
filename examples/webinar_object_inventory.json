@@ -1,0 +1,150 @@
+{
+  "name": "Webinar · Logali HANA Guard · Inventory approved demo objects",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Run Approved Inventory",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-480, 40]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SYS",
+        "objectName": "M_TABLES",
+        "columns": "SCHEMA_NAME,TABLE_NAME,IS_COLUMN_TABLE,RECORD_COUNT,TABLE_SIZE",
+        "filters": {
+          "values": [
+            {
+              "column": "SCHEMA_NAME",
+              "operator": "eq",
+              "value": "SAPHANADB"
+            },
+            {
+              "column": "TABLE_NAME",
+              "operator": "eq",
+              "value": "T001"
+            }
+          ]
+        },
+        "orderBy": {},
+        "limit": 5,
+        "includeMetadata": true
+      },
+      "id": "catalog-t001",
+      "name": "Inspect T001 Catalog Entry",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-80, -120]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SYS",
+        "objectName": "M_TABLES",
+        "columns": "SCHEMA_NAME,TABLE_NAME,IS_COLUMN_TABLE,RECORD_COUNT,TABLE_SIZE",
+        "filters": {
+          "values": [
+            {
+              "column": "SCHEMA_NAME",
+              "operator": "eq",
+              "value": "SAPHANADB"
+            },
+            {
+              "column": "TABLE_NAME",
+              "operator": "eq",
+              "value": "VBAK"
+            }
+          ]
+        },
+        "orderBy": {},
+        "limit": 5,
+        "includeMetadata": true
+      },
+      "id": "catalog-vbak",
+      "name": "Inspect VBAK Catalog Entry",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-80, 40]
+    },
+    {
+      "parameters": {
+        "resource": "rows",
+        "operation": "select",
+        "schema": "SYS",
+        "objectName": "M_TABLES",
+        "columns": "SCHEMA_NAME,TABLE_NAME,IS_COLUMN_TABLE,RECORD_COUNT,TABLE_SIZE",
+        "filters": {
+          "values": [
+            {
+              "column": "SCHEMA_NAME",
+              "operator": "eq",
+              "value": "SAPHANADB"
+            },
+            {
+              "column": "TABLE_NAME",
+              "operator": "eq",
+              "value": "ACDOCA"
+            }
+          ]
+        },
+        "orderBy": {},
+        "limit": 5,
+        "includeMetadata": true
+      },
+      "id": "catalog-acdoca",
+      "name": "Inspect ACDOCA Catalog Entry",
+      "type": "n8n-nodes-hana-secure.hanaSecure",
+      "typeVersion": 1,
+      "position": [-80, 200]
+    },
+    {
+      "parameters": {
+        "content": "## Approved object inventory\n\nThis workflow asks only the HANA system catalog whether the three webinar objects exist and how many records HANA reports. It does **not** read S/4 business rows.\n\nThe next step is an administrator-reviewed grant to a dedicated account such as `N8N_WEBINAR_RO`, limited to the exact tables or governed views used in the demonstration.",
+        "height": 260,
+        "width": 720
+      },
+      "id": "inventory-note",
+      "name": "Inventory Contract",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-480, -460]
+    }
+  ],
+  "connections": {
+    "Run Approved Inventory": {
+      "main": [
+        [
+          {
+            "node": "Inspect T001 Catalog Entry",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Inspect VBAK Catalog Entry",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Inspect ACDOCA Catalog Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "executionTimeout": 60
+  },
+  "active": false,
+  "tags": []
+}
