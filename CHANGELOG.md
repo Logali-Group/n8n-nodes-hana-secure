@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2026-08-19
+
+### Fixed
+
+- Version the physical icon filenames so n8n and browser caches cannot keep displaying the
+  pre-brand artwork after a package upgrade.
+
+## [0.2.1] - 2026-08-19
+
+### Fixed
+
+- Replace the overly generic database icon with a high-contrast Logali nut mark combined with the
+  guarded database symbol, optimized to remain recognizable in n8n at 24–32 pixels.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

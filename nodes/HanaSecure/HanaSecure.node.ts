@@ -238,8 +238,8 @@ export class HanaSecure implements INodeType {
 		displayName: 'Logali HANA Guard',
 		name: 'hanaSecure',
 		icon: {
-			light: 'file:hanaSecure.svg',
-			dark: 'file:hanaSecure.dark.svg',
+			light: 'file:logaliHanaGuard-v022.svg',
+			dark: 'file:logaliHanaGuard-v022.dark.svg',
 		},
 		group: ['input'],
 		version: 1,

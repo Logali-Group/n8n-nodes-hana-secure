@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <path d="M17 5h30l12 16v22L47 59H17L5 43V21Z" fill="#E9F2FF"/>
-  <path d="M47 5l12 16v22L47 59 39 48l8-32Z" fill="#12C8D4"/>
-  <path d="M17 19c0-4 7-7 15-7s15 3 15 7v24c0 4-7 7-15 7s-15-3-15-7Z" fill="#102D63"/>
-  <ellipse cx="32" cy="19" rx="11" ry="4" fill="#12C8D4"/>
-  <path d="M21 27c2.5 2 6.5 3 11 3s8.5-1 11-3M21 36c2.5 2 6.5 3 11 3s8.5-1 11-3" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
-  <path d="M45 32h9" stroke="#102D63" stroke-width="4" stroke-linecap="round"/>
-  <circle cx="56" cy="32" r="4" fill="#12C8D4" stroke="#102D63" stroke-width="3"/>
+  <circle cx="32" cy="32" r="30" fill="#102D63"/>
+  <path d="M32 4 55 17v30L32 60 9 47V17Zm0 13a15 15 0 1 0 0 30 15 15 0 0 0 0-30Z" fill="#FFFFFF" fill-rule="evenodd"/>
+  <path d="M44 9 55 17v30L44 53l-5-9a15 15 0 0 0 0-24Z" fill="#12C8D4"/>
+  <path d="M20 26c0-4 5-7 12-7s12 3 12 7v13c0 4-5 7-12 7s-12-3-12-7Z" fill="#FFFFFF" stroke="#102D63" stroke-width="2"/>
+  <ellipse cx="32" cy="26" rx="9" ry="4" fill="#12C8D4"/>
+  <path d="M23 32c2 1.6 5.2 2.5 9 2.5s7-.9 9-2.5M23 39c2 1.6 5.2 2.5 9 2.5s7-.9 9-2.5" fill="none" stroke="#102D63" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M42 35h8" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="52" cy="35" r="4" fill="#12C8D4" stroke="#FFFFFF" stroke-width="2.5"/>
 </svg>
