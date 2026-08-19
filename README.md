@@ -291,8 +291,8 @@ npm pack --dry-run
 See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
 [CHANGELOG.md](CHANGELOG.md).
 
-The intended public repository is
-`https://github.com/logali/n8n-nodes-hana-secure`. The first npm publication requires a
+The public repository is
+`https://github.com/Logali-Group/n8n-nodes-hana-secure`. The first npm publication requires a
 Logali-owned npm account; after that bootstrap release, configure npm Trusted Publishing for the
 public GitHub repository and `publish.yml`. Subsequent version tags publish through short-lived
 OIDC credentials with provenance instead of a long-lived npm token.

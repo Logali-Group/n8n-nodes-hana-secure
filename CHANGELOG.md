@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-08-19
+
+### Changed
+
+- Point package metadata, issue reporting, credential help, and node documentation to the verified
+  corporate GitHub account `Logali-Group`.
+- Keep `0.3.0` as the exact internally deployed artifact and use `0.3.1` for the first public
+  release candidate so two different packages never share the same version.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added

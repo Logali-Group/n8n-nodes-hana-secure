@@ -1,9 +1,9 @@
 {
 	"name": "n8n-nodes-hana-secure",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "Logali HANA Guard: security-first SAP HANA community node for self-hosted n8n",
 	"license": "MIT",
-	"homepage": "https://github.com/logali/n8n-nodes-hana-secure#readme",
+	"homepage": "https://github.com/Logali-Group/n8n-nodes-hana-secure#readme",
 	"keywords": [
 		"n8n-community-node-package",
 		"n8n",
@@ -19,10 +19,10 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/logali/n8n-nodes-hana-secure.git"
+		"url": "git+https://github.com/Logali-Group/n8n-nodes-hana-secure.git"
 	},
 	"bugs": {
-		"url": "https://github.com/logali/n8n-nodes-hana-secure/issues"
+		"url": "https://github.com/Logali-Group/n8n-nodes-hana-secure/issues"
 	},
 	"engines": {
 		"node": ">=22"
