@@ -16,7 +16,7 @@
         "schema": "SAPHANADB",
         "objectName": "T001",
         "columns": "MANDT,BUKRS,BUTXT,ORT01,LAND1,WAERS",
-        "filters": {},
+        "filters": { "values": [{ "column": "MANDT", "operator": "eq", "value": "250" }] },
         "orderBy": { "values": [{ "column": "BUKRS", "direction": "ASC" }] },
         "limit": 10,
         "includeMetadata": true

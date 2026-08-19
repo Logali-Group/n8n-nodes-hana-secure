@@ -16,7 +16,15 @@
         "schema": "SAPHANADB",
         "objectName": "T001",
         "columns": "MANDT,BUKRS,BUTXT,ORT01,LAND1,WAERS",
-        "filters": {},
+        "filters": {
+          "values": [
+            {
+              "column": "MANDT",
+              "operator": "eq",
+              "value": "250"
+            }
+          ]
+        },
         "orderBy": {
           "values": [
             {
@@ -42,7 +50,15 @@
         "schema": "SAPHANADB",
         "objectName": "VBAK",
         "columns": "MANDT,VBELN,ERDAT,AUART,VKORG,VTWEG,SPART,NETWR,WAERK",
-        "filters": {},
+        "filters": {
+          "values": [
+            {
+              "column": "MANDT",
+              "operator": "eq",
+              "value": "250"
+            }
+          ]
+        },
         "orderBy": {
           "values": [
             {
@@ -67,7 +83,7 @@
         "operation": "select",
         "schema": "SAPHANADB",
         "objectName": "ACDOCA",
-        "columns": "RCLNT,RBUKRS,GJAHR,BELNR,DOCLN,RACCT,HSL,RHCUR",
+        "columns": "RCLNT,RLDNR,RBUKRS,GJAHR,BELNR,DOCLN,RACCT,HSL,RHCUR",
         "filters": {
           "values": [
             {
@@ -79,6 +95,16 @@
               "column": "GJAHR",
               "operator": "eq",
               "value": "2025"
+            },
+            {
+              "column": "RCLNT",
+              "operator": "eq",
+              "value": "250"
+            },
+            {
+              "column": "RLDNR",
+              "operator": "eq",
+              "value": "0L"
             }
           ]
         },
@@ -106,7 +132,7 @@
     },
     {
       "parameters": {
-        "content": "## Direct HANA versus OData\n\n- **T001:** compact master-data read versus `API_COMPANYCODE_SRV`.\n- **VBAK:** technical table read versus a released sales-order API or CDS projection.\n- **ACDOCA:** tightly filtered ledger sample versus `API_GLACCOUNTLINEITEM`.\n\nDirect SQL is useful for controlled reads, reconciliation, diagnostics, and private reporting. Business writes stay behind released APIs, BAPIs, CAP services, or stored procedures over owned staging tables.\n\nPublic copies contain no credential, endpoint, or administrator user.",
+        "content": "## Direct HANA versus OData\n\n- **T001:** compact master-data read versus `API_COMPANYCODE_SRV`; `MANDT=250` is explicit because SQL does not apply the SAP client context for us.\n- **VBAK:** technical table read versus a released sales-order API or CDS projection; the same client boundary is explicit.\n- **ACDOCA:** tightly filtered ledger sample versus `API_GLACCOUNTLINEITEM`; `RCLNT=250` and `RLDNR=0L` prevent an apparently duplicated result across ledgers.\n\nDirect SQL is useful for controlled reads, reconciliation, diagnostics, and private reporting. Business writes stay behind released APIs, BAPIs, CAP services, or stored procedures over owned staging tables.\n\nPublic copies contain no credential, endpoint, or administrator user.",
         "height": 330,
         "width": 760
       },

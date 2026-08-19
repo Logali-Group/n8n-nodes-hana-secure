@@ -16,7 +16,7 @@
         "schema": "SAPHANADB",
         "objectName": "VBAK",
         "columns": "MANDT,VBELN,ERDAT,AUART,VKORG,VTWEG,SPART,NETWR,WAERK",
-        "filters": {},
+        "filters": { "values": [{ "column": "MANDT", "operator": "eq", "value": "250" }] },
         "orderBy": { "values": [{ "column": "ERDAT", "direction": "DESC" }] },
         "limit": 10,
         "includeMetadata": true

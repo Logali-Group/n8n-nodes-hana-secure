@@ -15,11 +15,13 @@
         "operation": "select",
         "schema": "SAPHANADB",
         "objectName": "ACDOCA",
-        "columns": "RCLNT,RBUKRS,GJAHR,BELNR,DOCLN,RACCT,HSL,RHCUR",
+        "columns": "RCLNT,RLDNR,RBUKRS,GJAHR,BELNR,DOCLN,RACCT,HSL,RHCUR",
         "filters": {
           "values": [
             { "column": "RBUKRS", "operator": "eq", "value": "1010" },
-            { "column": "GJAHR", "operator": "eq", "value": "2025" }
+            { "column": "GJAHR", "operator": "eq", "value": "2025" },
+            { "column": "RCLNT", "operator": "eq", "value": "250" },
+            { "column": "RLDNR", "operator": "eq", "value": "0L" }
           ]
         },
         "orderBy": {
