@@ -296,6 +296,19 @@ object; a remotely exposed parameterized object can be selected through a config
 table. ABAP CDS view entities without a SQL/virtual object must be consumed through a released
 OData/API or an ABAP-side contract.
 
+### ABAP CDS laboratory example
+
+[`examples/abap/ZI_N8N_COUNTRY_P.ddls.asddls`](examples/abap/ZI_N8N_COUNTRY_P.ddls.asddls) is a
+small parameterized ABAP CDS training view over the public local API `I_Country`. It generates the
+runtime SQL view `ZN8NCOUNTRYP` and accepts `p_country` as its only input. The example was created,
+syntax-checked, activated, and executed through ADT on a non-production S/4HANA practice system;
+both the CDS name and generated SQL view returned the expected country row for `DE`.
+
+To consume the generated runtime object through Logali HANA Guard, select `ZN8NCOUNTRYP`, keep
+**Runtime View Parameters → Auto Detect** (or choose positional mode), and provide `DE` as the first
+parameter. Direct HANA access still requires a separately reviewed SQL endpoint and database grant
+to the generated runtime object; ABAP authorization and ADT access do not create that HANA grant.
+
 User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`NOT LIKE`, literal
 contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values
 remain prepared-statement parameters; identifiers remain validated and quoted.
@@ -373,6 +386,9 @@ automatic composite pagination with node version `1.3`.
 demonstrates function discovery, description, prepared named inputs, governed output columns, and
 bounded composite pagination with node version `1.4`. The corresponding reviewed lab DDL template
 is [`sql/setup_table_function_demo.sql`](sql/setup_table_function_demo.sql).
+
+[`examples/hana-guard-cds-country-0.7.json`](examples/hana-guard-cds-country-0.7.json) demonstrates
+the parameterized ABAP CDS runtime view using the generated SQL object `ZN8NCOUNTRYP`.
 
 The webinar examples are also sanitized:
 

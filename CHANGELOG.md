@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - Reuse Select, Preview, Count, Exists, Distinct, Aggregate, key lookup, column/row policies,
   result caps, and composite pagination over table-function results.
 - Add a sanitized n8n workflow and reviewed non-production SQLScript setup template.
+- Add a parameterized ABAP CDS laboratory definition plus a sanitized workflow for its generated
+  SQL runtime view; verify creation, syntax, activation, and a bounded `DE` lookup through ADT.
 
 ### Security
 
