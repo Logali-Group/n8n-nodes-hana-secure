@@ -8,6 +8,7 @@ import {
 	buildWhereClause,
 	combineWhereClauses,
 	normalizeUiFilters,
+	normalizeUiKeyFields,
 	parseAllowedSchemas,
 	parseIdentifierList,
 	parseParametersJson,
@@ -116,6 +117,28 @@ describe('structured query builders', () => {
 		assert.deepEqual(
 			normalizeUiFilters([{ column: 'DELETED_AT', operator: 'eq', value: '', valueType: 'null' }]),
 			[{ column: 'DELETED_AT', operator: 'isNull' }],
+		);
+	});
+
+	it('builds typed simple and composite key predicates', () => {
+		assert.deepEqual(
+			normalizeUiKeyFields([
+				{ column: 'MANDT', value: '250', valueType: 'string' },
+				{ column: 'DOCUMENT_ID', value: '42', valueType: 'number' },
+			]),
+			[
+				{ column: 'MANDT', operator: 'eq', value: '250' },
+				{ column: 'DOCUMENT_ID', operator: 'eq', value: 42 },
+			],
+		);
+		assert.throws(() => normalizeUiKeyFields([]), /at least one key field/);
+		assert.throws(
+			() =>
+				normalizeUiKeyFields([
+					{ column: 'MANDT', value: '250' },
+					{ column: 'mandt', value: '251' },
+				]),
+			/only once/,
 		);
 	});
 });

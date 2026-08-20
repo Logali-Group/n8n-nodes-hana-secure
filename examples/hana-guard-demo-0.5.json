@@ -1,0 +1,119 @@
+{
+	"name": "Logali HANA Guard 0.5 - Governed demo",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "manual-trigger",
+			"name": "Run demo",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 40]
+		},
+		{
+			"parameters": {
+				"resource": "rows",
+				"operation": "getByKey",
+				"schema": "TRAINING",
+				"objectName": "COMPANY_CODES",
+				"columns": "CLIENT,COMPANY_CODE,COMPANY_NAME,COUNTRY,CURRENCY",
+				"keyFields": {
+					"values": [
+						{
+							"column": "CLIENT",
+							"value": "250",
+							"valueType": "string"
+						},
+						{
+							"column": "COMPANY_CODE",
+							"value": "1010",
+							"valueType": "string"
+						}
+					]
+				},
+				"failIfNotFound": true,
+				"includeMetadata": true,
+				"outputMode": "singleItem",
+				"resultField": "company"
+			},
+			"id": "get-company-by-key",
+			"name": "Get approved company by key",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.2,
+			"position": [280, -60]
+		},
+		{
+			"parameters": {
+				"resource": "rows",
+				"operation": "select",
+				"schema": "TRAINING",
+				"objectName": "OPEN_ITEMS",
+				"columns": "COMPANY_CODE,DOCUMENT_ID,AMOUNT,CURRENCY,STATUS",
+				"filterLogic": "AND",
+				"filters": {
+					"values": [
+						{
+							"column": "STATUS",
+							"operator": "eq",
+							"value": "OPEN",
+							"valueType": "string"
+						}
+					]
+				},
+				"paginationMode": "none",
+				"orderBy": {
+					"values": [
+						{
+							"column": "AMOUNT",
+							"direction": "DESC"
+						}
+					]
+				},
+				"limit": 10,
+				"includeMetadata": true,
+				"outputMode": "addToInput",
+				"resultField": "openItems"
+			},
+			"id": "enrich-open-items",
+			"name": "Add approved open items",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.2,
+			"position": [280, 160]
+		},
+		{
+			"parameters": {
+				"content": "Attach your own Logali HANA Guard credential. Replace TRAINING objects and fields with governed demo objects. This workflow contains no credential, host, user, token, or internal instance identifier.",
+				"height": 190,
+				"width": 520
+			},
+			"id": "setup-note",
+			"name": "Demo setup",
+			"type": "n8n-nodes-base.stickyNote",
+			"typeVersion": 1,
+			"position": [0, -300]
+		}
+	],
+	"connections": {
+		"Run demo": {
+			"main": [
+				[
+					{
+						"node": "Get approved company by key",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Add approved open items",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"pinData": {},
+	"settings": {
+		"executionOrder": "v1"
+	},
+	"active": false,
+	"tags": []
+}

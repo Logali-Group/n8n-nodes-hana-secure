@@ -54,6 +54,12 @@ export interface UiFilter extends Filter {
 	valuesJson?: string;
 }
 
+export interface UiKeyField {
+	column: string;
+	value: unknown;
+	valueType?: Exclude<FilterValueType, 'null' | 'json'>;
+}
+
 export interface OrderBy {
 	column: string;
 	direction: 'ASC' | 'DESC';

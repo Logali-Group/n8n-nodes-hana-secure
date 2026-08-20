@@ -1,6 +1,6 @@
 import { OperationalError } from 'n8n-workflow';
 
-import type { Filter, FilterLogic, FilterValueType, OrderBy, UiFilter } from './types';
+import type { Filter, FilterLogic, FilterValueType, OrderBy, UiFilter, UiKeyField } from './types';
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$#]*$/;
 const FORBIDDEN_SQL_KEYWORDS = [
@@ -240,6 +240,26 @@ export function normalizeUiFilters(filters: UiFilter[]): Filter[] {
 			column: filter.column,
 			operator: filter.operator,
 			value: typedValue(filter.value, valueType),
+		};
+	});
+}
+
+export function normalizeUiKeyFields(keyFields: UiKeyField[]): Filter[] {
+	if (keyFields.length === 0) {
+		throw new Error('Get One by Key requires at least one key field.');
+	}
+	const uniqueColumns = new Set<string>();
+	return keyFields.map((field) => {
+		const column = assertIdentifier(field.column, 'key column');
+		const normalizedColumn = column.toUpperCase();
+		if (uniqueColumns.has(normalizedColumn)) {
+			throw new Error('Each key column may be configured only once.');
+		}
+		uniqueColumns.add(normalizedColumn);
+		return {
+			column,
+			operator: 'eq',
+			value: typedValue(field.value, field.valueType ?? 'string'),
 		};
 	});
 }
