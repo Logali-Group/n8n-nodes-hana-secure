@@ -2,6 +2,7 @@ export interface HanaCredentials {
 	host: string;
 	port: number;
 	databaseName?: string;
+	sapClient?: string;
 	ignoreTopology?: boolean;
 	user: string;
 	password: string;

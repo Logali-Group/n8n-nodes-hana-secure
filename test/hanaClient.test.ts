@@ -7,6 +7,7 @@ import {
 	closeClient,
 	connectClient,
 	createClientOptions,
+	normalizeSapClient,
 	queryFingerprint,
 } from '../nodes/HanaSecure/hanaClient';
 import type { HanaCredentials } from '../nodes/HanaSecure/types';
@@ -41,7 +42,26 @@ describe('HANA client connection options', () => {
 		assert.equal(options.ignoreTopology, true);
 		assert.equal(options.disableCloudRedirect, true);
 		assert.equal(options['SESSIONVARIABLE:APPLICATION'], 'n8n-hana-secure');
+		assert.equal(options['SESSIONVARIABLE:CLIENT'], undefined);
+		assert.equal(options['SESSIONVARIABLE:CDS_CLIENT'], undefined);
 		assert.equal(options.databaseName, undefined);
+	});
+
+	it('sets both SAP client session variables for client-dependent CDS runtimes', () => {
+		const options = createClientOptions({ ...credentials, sapClient: ' 250 ' });
+		assert.equal(options['SESSIONVARIABLE:CLIENT'], '250');
+		assert.equal(options['SESSIONVARIABLE:CDS_CLIENT'], '250');
+	});
+
+	it('rejects malformed SAP clients before opening a connection', () => {
+		assert.equal(normalizeSapClient(''), undefined);
+		assert.equal(normalizeSapClient('000'), '000');
+		for (const sapClient of ['25', '2500', 'ABC']) {
+			assert.throws(
+				() => createClientOptions({ ...credentials, sapClient }),
+				/SAP Client must contain exactly three digits/,
+			);
+		}
 	});
 
 	it('allows directly reachable scale-out deployments to use server topology', () => {

@@ -38,6 +38,15 @@ export class HanaSecureApi implements ICredentialType {
 			description: 'Optional tenant database name',
 		},
 		{
+			displayName: 'SAP Client',
+			name: 'sapClient',
+			type: 'string',
+			default: '',
+			placeholder: '250',
+			description:
+				'Optional three-digit ABAP client for client-dependent CDS runtimes. Sets the HANA CLIENT and CDS_CLIENT session variables; it does not grant access or replace Required Filters.',
+		},
+		{
 			displayName: 'Ignore Server Topology',
 			name: 'ignoreTopology',
 			type: 'boolean',
