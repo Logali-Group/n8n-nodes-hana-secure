@@ -6,10 +6,9 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.7.0` development candidate. Version `0.6.0` is public on npm with provenance and
-> installs by name on self-hosted n8n. The connection and read contract has been verified against
-> SAP HANA `2.00.088`; the new table-function path still requires a non-production HANA end-to-end
-> test before `0.7.0` is published.
+> Status: `0.7.1` is public on npm with provenance and installs by name on self-hosted n8n. The
+> connection, governed reads, table-function discovery, and parameterized ABAP CDS runtime
+> recognition have been verified against SAP HANA `2.00.088` on a non-production system.
 
 ## Why this node exists
 
@@ -133,12 +132,12 @@ Copy the tarball to the Docker host and replace `<n8n-container>` with the devel
 name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.6.0.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.7.1.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.6.0.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.7.1.tgz
 exit
 
 docker restart <n8n-container>
@@ -245,16 +244,20 @@ user or database administrator account into n8n.
 - **List Schemas**: lists visible non-system schemas and applies the credential allowlist.
 - **List Tables and Views**: lists tables, SQL/calculation views, and virtual tables in one allowed
   schema, with an optional literal prefix and a result limit of 1–1,000 (100 by default).
-- **List Table Functions**: lists visible, valid table functions and their input counts and SQL
-  security mode, filtered by the same exact object allowlist.
-- **Describe Table Function**: returns its scalar inputs, output columns, SQL security mode, owner,
-  determinism, and creation metadata without exposing its implementation text.
+- **List Table Functions / Parameterized CDS**: lists visible, valid table functions and generated
+  parameterized ABAP CDS runtimes, prioritizing custom `Y*` and `Z*` names when a schema contains
+  more than 500 functions. Results include input counts and SQL security mode and use the same
+  exact object allowlist.
+- **Describe Table Function / Parameterized CDS**: returns scalar inputs, output columns, SQL
+  security mode, owner, determinism, and creation metadata without exposing implementation text.
 - **Describe Table or View**: returns approved column metadata, including comments and defaults
   when the HANA catalog version exposes them.
-- **Inspect Semantic/CDS Runtime View**: classifies SQL runtime views, calculation views, and HANA
-  virtual tables without claiming access to unavailable ABAP source definitions.
-- **List Semantic View Parameters**: returns ordered SQL/virtual-view parameters or named
-  calculation-view placeholders, including defaults and mandatory flags where HANA exposes them.
+- **Inspect Semantic/CDS Runtime View**: classifies SQL runtime views, calculation views, HANA
+  virtual tables, and table functions that may represent a parameterized ABAP CDS runtime without
+  claiming access to unavailable ABAP source definitions.
+- **List Semantic View Parameters**: returns ordered SQL/virtual-view parameters, named
+  calculation-view placeholders, or table-function inputs, including defaults and mandatory flags
+  where HANA exposes them.
 - **List Keys and Constraints**: discovers governed primary-key and unique-key columns.
 
 Schema, object, filter-column, sort-column, cursor-column, aggregate-column, and key-column fields
@@ -283,31 +286,35 @@ For a parameterized runtime object, choose **Runtime View Parameters**:
   `PLACEHOLDER."$$P_NAME$$" => ?` bindings;
 - **No Input Parameters** reads a normal table or view.
 
-Node version `1.4` adds **Row Source → HANA Table Function**. Choose a valid function, add every
-scalar input by its catalog name, and then use the normal Select, Preview, Count, Exists, Distinct,
-Aggregate, key lookup, filters, output-column policy, required filters, limits, and composite
-pagination controls over the returned table. Table/array inputs are intentionally rejected in this
-first guarded contract. For AI Tool execution, the function must be named explicitly in
-**Allowed Objects**; an empty object allowlist is not accepted for function discovery or invocation.
+Node version `1.4` adds **Row Source → Table Function / Parameterized ABAP CDS**. Choose a valid
+function, add every scalar input by its catalog name, and then use the normal Select, Preview,
+Count, Exists, Distinct, Aggregate, key lookup, filters, output-column policy, required filters,
+limits, and composite pagination controls over the returned table. Table/array inputs are
+intentionally rejected in this guarded contract. For AI Tool execution, the function must be named
+explicitly in **Allowed Objects**; an empty object allowlist is not accepted for discovery or
+invocation.
 
 The node executes the HANA object that actually exists at SQL runtime. It does not parse or execute
-ABAP CDS DDL source. A CDS view with a generated SQL runtime object can be selected through that
-object; a remotely exposed parameterized object can be selected through a configured HANA virtual
-table. ABAP CDS view entities without a SQL/virtual object must be consumed through a released
-OData/API or an ABAP-side contract.
+ABAP CDS DDL source. A non-parameterized CDS with a generated SQL view is read as a view. A
+parameterized classic CDS is commonly generated as a HANA table function and is invoked through
+the table-function source. A remotely exposed parameterized object can also appear as a configured
+HANA virtual table. CDS view entities without an SQL-visible runtime object must be consumed
+through a released OData/API or an ABAP-side contract.
 
 ### ABAP CDS laboratory example
 
 [`examples/abap/ZI_N8N_COUNTRY_P.ddls.asddls`](examples/abap/ZI_N8N_COUNTRY_P.ddls.asddls) is a
 small parameterized ABAP CDS training view over the public local API `I_Country`. It generates the
-runtime SQL view `ZN8NCOUNTRYP` and accepts `p_country` as its only input. The example was created,
-syntax-checked, activated, and executed through ADT on a non-production S/4HANA practice system;
-both the CDS name and generated SQL view returned the expected country row for `DE`.
+runtime HANA table function `ZN8NCOUNTRYP` and accepts `p_country` as its only input. The example
+was created, syntax-checked, and activated through ADT on a non-production S/4HANA practice system.
+Live HANA catalog discovery then identified `SAPHANADB.ZN8NCOUNTRYP` as a valid table function with
+one input parameter.
 
-To consume the generated runtime object through Logali HANA Guard, select `ZN8NCOUNTRYP`, keep
-**Runtime View Parameters → Auto Detect** (or choose positional mode), and provide `DE` as the first
-parameter. Direct HANA access still requires a separately reviewed SQL endpoint and database grant
-to the generated runtime object; ABAP authorization and ADT access do not create that HANA grant.
+To consume it through Logali HANA Guard, choose **Row Source → Table Function / Parameterized ABAP
+CDS**, select `ZN8NCOUNTRYP`, and bind `P_COUNTRY = DE`. Direct HANA access still requires a
+separately reviewed SQL endpoint and database grant to the generated runtime function; ABAP
+authorization and ADT access do not create that HANA grant. The live least-privilege account
+correctly reached this database privilege boundary until that explicit grant is reviewed.
 
 User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`NOT LIKE`, literal
 contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values
@@ -388,7 +395,8 @@ bounded composite pagination with node version `1.4`. The corresponding reviewed
 is [`sql/setup_table_function_demo.sql`](sql/setup_table_function_demo.sql).
 
 [`examples/hana-guard-cds-country-0.7.json`](examples/hana-guard-cds-country-0.7.json) demonstrates
-the parameterized ABAP CDS runtime view using the generated SQL object `ZN8NCOUNTRYP`.
+recognition and governed invocation of the parameterized ABAP CDS runtime table function
+`ZN8NCOUNTRYP`.
 
 The webinar examples are also sanitized:
 

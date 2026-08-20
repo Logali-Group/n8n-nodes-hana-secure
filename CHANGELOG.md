@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.1] - 2026-08-20
+
+### Fixed
+
+- Recognize a valid HANA table function as a possible parameterized ABAP CDS runtime when semantic
+  inspection does not find an SQL view or virtual table.
+- Return its ordered catalog inputs from semantic parameter discovery with explicit table-function
+  positional binding metadata.
+- Correct the ABAP CDS country workflow to invoke `SAPHANADB.ZN8NCOUNTRYP` as a table function with
+  the named `P_COUNTRY` input instead of treating it as a parameterized SQL view.
+- Prioritize custom `Y*` and `Z*` table functions in editor choices so generated training objects
+  remain selectable in schemas containing more than 500 functions.
+
+### Changed
+
+- Label table-function operations and the row source explicitly for parameterized ABAP CDS runtime
+  objects while keeping the underlying governed HANA table-function contract unchanged.
+- Allow an exact runtime name to be entered for semantic/CDS inspection after discovery through
+  the bounded catalog operations.
+
 ## [0.7.0] - 2026-08-20
 
 ### Added

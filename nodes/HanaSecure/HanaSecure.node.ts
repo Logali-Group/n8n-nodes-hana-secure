@@ -163,7 +163,7 @@ function addResultMetadata(
 	return limitedRows.map((row, index) => (index === 0 ? { ...row, _hana: metadata } : row));
 }
 
-async function executeCatalogOperation(
+export async function executeCatalogOperation(
 	context: IExecuteFunctions,
 	session: HanaSession,
 	itemIndex: number,
@@ -359,9 +359,26 @@ WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?`,
 				[schema, objectName],
 			);
 			if (virtualRows.length === 0) {
-				throw new OperationalError(
-					'The selected object is not a visible HANA runtime SQL or virtual view.',
+				const functionRows = await session.query(
+					`SELECT "SCHEMA_NAME", "FUNCTION_NAME", "SQL_SECURITY", "INPUT_PARAMETER_COUNT", "RETURN_VALUE_COUNT", "IS_DETERMINISTIC", "OWNER_NAME", "CREATE_TIME"
+FROM "SYS"."FUNCTIONS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" = ? AND "FUNCTION_USAGE_TYPE" = 'TABLE' AND "IS_VALID" = 'TRUE'`,
+					[schema, objectName],
 				);
+				if (functionRows.length === 0) {
+					throw new OperationalError(
+						'The selected object is not a visible HANA runtime view, virtual table, or table function.',
+					);
+				}
+				return functionRows.map((row) => ({
+					...row,
+					SEMANTIC_KIND: 'HANA_TABLE_FUNCTION_OR_PARAMETERIZED_ABAP_CDS',
+					DIRECT_SQL_QUERYABLE: true,
+					REQUIRES_PARAMETERS: Number(row.INPUT_PARAMETER_COUNT ?? 0) > 0,
+					INVOCATION_MODE: 'TABLE_FUNCTION_POSITIONAL',
+					CDS_NOTE:
+						'Parameterized ABAP CDS runtime objects are commonly exposed in HANA as table functions. Use Describe Table Function and Row Source → Table Function / Parameterized ABAP CDS to inspect and invoke this object safely.',
+				}));
 			}
 			return virtualRows.map((row) => ({
 				...row,
@@ -394,23 +411,50 @@ WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?`,
 			[schema, objectName],
 		);
 		if (viewRows.length === 0) {
-			const virtualRows = await session.query(
+			const virtualObjectRows = await session.query(
+				`SELECT "TABLE_NAME"
+FROM "SYS"."VIRTUAL_TABLES"
+WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?`,
+				[schema, objectName],
+			);
+			if (virtualObjectRows.length > 0) {
+				const virtualRows = await session.query(
 				`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "LENGTH", "SCALE", "POSITION", "HAS_DEFAULT_VALUE", "IS_MANDATORY", "DEFAULT_VALUE"
 FROM "SYS"."VIRTUAL_TABLE_PARAMETERS"
 WHERE "SCHEMA_NAME" = ? AND "OBJECT_NAME" = ?
 ORDER BY "POSITION"`,
-				[schema, objectName],
-			);
+					[schema, objectName],
+				);
+				return addResultMetadata(
+					virtualRows.map((row) => ({
+						...row,
+						BINDING_MODE: 'SQL_POSITIONAL',
+						INPUT_NAME: row.PARAMETER_NAME,
+					})),
+					operation,
+					20,
+					true,
+					{ semanticKind: 'VIRTUAL_RUNTIME_VIEW', hasParameters: virtualRows.length > 0 },
+				);
+			}
+
+			const functionMetadata = await readTableFunction(session, schema, objectName);
 			return addResultMetadata(
-				virtualRows.map((row) => ({
-					...row,
-					BINDING_MODE: 'SQL_POSITIONAL',
-					INPUT_NAME: row.PARAMETER_NAME,
+				functionMetadata.inputs.map((row) => ({
+					PARAMETER_NAME: row.name,
+					DATA_TYPE_NAME: row.dataTypeName,
+					POSITION: row.position,
+					PARAMETER_TYPE: row.parameterType,
+					BINDING_MODE: 'TABLE_FUNCTION_POSITIONAL',
+					INPUT_NAME: row.name,
 				})),
 				operation,
 				20,
 				true,
-				{ semanticKind: 'VIRTUAL_RUNTIME_VIEW', hasParameters: virtualRows.length > 0 },
+				{
+					semanticKind: 'HANA_TABLE_FUNCTION_OR_PARAMETERIZED_ABAP_CDS',
+					hasParameters: functionMetadata.inputs.length > 0,
+				},
 			);
 		}
 		const isCalculationView = String(viewRows[0].VIEW_TYPE).toUpperCase() === 'CALC';
@@ -1076,10 +1120,11 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['catalog'] } },
 				options: [
 					{
-						name: 'Describe Table Function',
+						name: 'Describe Table Function / Parameterized CDS',
 						value: 'describeTableFunction',
-						action: 'Describe a table function',
-						description: 'Return table-function inputs, output columns, and security metadata',
+						action: 'Describe a table function or parameterized CDS runtime',
+						description:
+							'Return inputs, output columns, and security metadata for a table function, including a parameterized ABAP CDS runtime',
 					},
 					{
 						name: 'Describe Table or View',
@@ -1092,7 +1137,7 @@ export class HanaSecure implements INodeType {
 						value: 'inspectSemanticView',
 						action: 'Inspect a semantic runtime view',
 						description:
-							'Recognize a visible HANA runtime SQL or calculation view without claiming access to ABAP CDS source',
+							'Recognize a visible HANA runtime SQL view, virtual table, calculation view, or parameterized CDS table function without claiming access to ABAP CDS source',
 					},
 					{
 						name: 'List Keys and Constraints',
@@ -1114,10 +1159,11 @@ export class HanaSecure implements INodeType {
 							'Discover positional SQL-view parameters or named calculation-view placeholders',
 					},
 					{
-						name: 'List Table Functions',
+						name: 'List Table Functions / Parameterized CDS',
 						value: 'listTableFunctions',
 						action: 'List table functions',
-						description: 'List visible, valid HANA table functions in one allowed schema',
+						description:
+							'List visible, valid HANA table functions, including parameterized ABAP CDS runtimes, in one allowed schema',
 					},
 					{
 						name: 'List Tables and Views',
@@ -1278,7 +1324,10 @@ export class HanaSecure implements INodeType {
 				type: 'options',
 				options: [
 					{ name: 'Table or View', value: 'tableOrView' },
-					{ name: 'HANA Table Function', value: 'tableFunction' },
+					{
+						name: 'Table Function / Parameterized ABAP CDS',
+						value: 'tableFunction',
+					},
 				],
 				default: 'tableOrView',
 				description:
@@ -1316,17 +1365,28 @@ export class HanaSecure implements INodeType {
 				displayOptions: {
 					show: {
 						resource: ['catalog'],
-						operation: [
-							'describeObject',
-							'inspectSemanticView',
-							'listSemanticParameters',
-							'listConstraints',
-						],
+						operation: ['describeObject', 'listConstraints'],
 					},
 				},
 			},
 			{
-				displayName: 'Table Function Name or ID',
+				displayName: 'Runtime Object Name',
+				name: 'objectName',
+				type: 'string',
+				default: '',
+				required: true,
+				placeholder: 'ZN8NCOUNTRYP',
+				description:
+					'Exact HANA runtime name. Use List Tables and Views or List Table Functions / Parameterized CDS to discover it.',
+				displayOptions: {
+					show: {
+						resource: ['catalog'],
+						operation: ['inspectSemanticView', 'listSemanticParameters'],
+					},
+				},
+			},
+			{
+				displayName: 'Table Function / Parameterized CDS Name or ID',
 				name: 'functionName',
 				type: 'options',
 				typeOptions: {
@@ -1335,7 +1395,7 @@ export class HanaSecure implements INodeType {
 				},
 				default: '',
 				required: true,
-				description: 'Approved valid HANA table function. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				description: 'Approved valid HANA table function or generated runtime function for a parameterized ABAP CDS. Custom Y/Z names are prioritized. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: { resource: ['catalog'], operation: ['describeTableFunction'] },
 				},
@@ -1355,7 +1415,7 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['rows'], sourceKind: ['tableOrView'] } },
 			},
 			{
-				displayName: 'Table Function Name or ID',
+				displayName: 'Table Function / Parameterized CDS Name or ID',
 				name: 'functionName',
 				type: 'options',
 				typeOptions: {
@@ -1365,7 +1425,7 @@ export class HanaSecure implements INodeType {
 				default: '',
 				required: true,
 				description:
-					'Approved valid HANA table function used as the row source. It must also be present in Allowed Objects when that policy is configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+					'Approved valid HANA table function or generated runtime function for a parameterized ABAP CDS. Custom Y/Z names are prioritized. It must also be present in Allowed Objects when that policy is configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 				displayOptions: {
 					show: {
 						'@version': [{ _cnd: { gte: 1.4 } }],
