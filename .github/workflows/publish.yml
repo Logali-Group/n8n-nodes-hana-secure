@@ -40,6 +40,9 @@ on:
     tags:
       # Matches v0.1.0, v1.2.3, v2.0.0-rc.1, etc.
       - 'v*.*.*'
+  # Allows an authenticated maintainer to retry a failed first publication
+  # after correcting the workflow, without deleting or moving a release tag.
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -69,6 +72,7 @@ jobs:
         run: 'npm ci'
 
       - name: Verify tag matches package version
+        if: github.event_name == 'push'
         run: |
           test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
 
@@ -90,8 +94,8 @@ jobs:
         if: steps.publish-auth.outputs.bootstrap == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --provenance --access public
+        run: npm run release
 
       - name: Publish with npm Trusted Publishing
         if: steps.publish-auth.outputs.bootstrap == 'false'
-        run: npm publish --access public
+        run: npm run release
