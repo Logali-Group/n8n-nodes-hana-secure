@@ -31,7 +31,11 @@ export async function loadTableFunctionOptions(
 		`SELECT "FUNCTION_NAME", "SQL_SECURITY", "INPUT_PARAMETER_COUNT"
 FROM "SYS"."FUNCTIONS"
 WHERE "SCHEMA_NAME" = ? AND "FUNCTION_USAGE_TYPE" = 'TABLE' AND "IS_VALID" = 'TRUE'${namePredicate}
-ORDER BY "FUNCTION_NAME"
+ORDER BY CASE
+	WHEN "FUNCTION_NAME" LIKE 'Z%' OR "FUNCTION_NAME" LIKE 'Y%' THEN 0
+	WHEN "FUNCTION_NAME" LIKE '/%' THEN 1
+	ELSE 2
+END, "FUNCTION_NAME"
 LIMIT ${MAX_DYNAMIC_OPTIONS + 1}`,
 		governedNames ? [schema, ...governedNames] : [schema],
 	);
@@ -39,7 +43,7 @@ LIMIT ${MAX_DYNAMIC_OPTIONS + 1}`,
 		.filter((row) => isObjectAllowed(schema, String(row.FUNCTION_NAME), allowedObjects))
 		.slice(0, MAX_DYNAMIC_OPTIONS)
 		.map((row) => ({
-			name: `${String(row.FUNCTION_NAME)} (table function)`,
+			name: `${String(row.FUNCTION_NAME)} (table function / parameterized CDS)`,
 			value: String(row.FUNCTION_NAME),
 			description: `${String(row.INPUT_PARAMETER_COUNT ?? 0)} input parameter(s); SQL security ${String(row.SQL_SECURITY ?? 'UNKNOWN')}`,
 		}));

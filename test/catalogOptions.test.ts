@@ -112,11 +112,27 @@ describe('dynamic governed catalog options', () => {
 		);
 		assert.deepEqual(options, [
 			{
-				name: 'GET_OPEN_ORDERS (table function)',
+				name: 'GET_OPEN_ORDERS (table function / parameterized CDS)',
 				value: 'GET_OPEN_ORDERS',
 				description: '2 input parameter(s); SQL security INVOKER',
 			},
 		]);
+	});
+
+	it('prioritizes custom Y and Z functions before the bounded editor result', async () => {
+		let query = '';
+		await loadTableFunctionOptions(
+			{
+				query: async (sql) => {
+					query = sql;
+					return [];
+				},
+			},
+			{ ...baseCredentials, allowedSchemas: 'TRAINING' },
+			'TRAINING',
+		);
+		assert.match(query, /WHEN "FUNCTION_NAME" LIKE 'Z%'/);
+		assert.match(query, /WHEN "FUNCTION_NAME" LIKE '\/%'/);
 	});
 
 	it('loads table-function inputs and governed output columns', async () => {

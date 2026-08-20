@@ -1,5 +1,5 @@
 {
-	"name": "Logali HANA Guard 0.7 - ABAP CDS country runtime",
+	"name": "Logali HANA Guard 0.7 - Parameterized ABAP CDS country",
 	"nodes": [
 		{
 			"parameters": {},
@@ -13,11 +13,11 @@
 			"parameters": {
 				"resource": "catalog",
 				"operation": "inspectSemanticView",
-				"schema": "SAPA4H",
+				"schema": "SAPHANADB",
 				"objectName": "ZN8NCOUNTRYP"
 			},
 			"id": "inspect-cds-runtime",
-			"name": "Inspect CDS runtime view",
+			"name": "Recognize CDS runtime function",
 			"type": "n8n-nodes-hana-secure.hanaSecure",
 			"typeVersion": 1.4,
 			"position": [300, -80]
@@ -26,14 +26,13 @@
 			"parameters": {
 				"resource": "rows",
 				"operation": "select",
-				"schema": "SAPA4H",
-				"sourceKind": "tableOrView",
-				"objectName": "ZN8NCOUNTRYP",
-				"semanticParameterMode": "sqlPositional",
-				"semanticParameters": {
+				"schema": "SAPHANADB",
+				"sourceKind": "tableFunction",
+				"functionName": "ZN8NCOUNTRYP",
+				"tableFunctionParameters": {
 					"values": [
 						{
-							"name": "",
+							"name": "P_COUNTRY",
 							"value": "DE",
 							"valueType": "string"
 						}
@@ -65,7 +64,7 @@
 		},
 		{
 			"parameters": {
-				"content": "Attach a least-privilege HANA SQL credential. The example expects the generated runtime SQL view SAPA4H.ZN8NCOUNTRYP and does not contain an ADT or database credential. Adapt the SAP schema if your SID differs.",
+				"content": "Attach a least-privilege HANA SQL credential with SELECT/EXECUTE access to the generated runtime function. A parameterized ABAP CDS such as ZI_N8N_COUNTRY_P is exposed here as SAPHANADB.ZN8NCOUNTRYP, a HANA table function. Adapt the schema and runtime name for your system. The workflow contains no ADT or database credential.",
 				"height": 220,
 				"width": 650
 			},
@@ -80,7 +79,7 @@
 		"Run demo": {
 			"main": [
 				[
-					{ "node": "Inspect CDS runtime view", "type": "main", "index": 0 },
+					{ "node": "Recognize CDS runtime function", "type": "main", "index": 0 },
 					{ "node": "Read CDS runtime for DE", "type": "main", "index": 0 }
 				]
 			]
