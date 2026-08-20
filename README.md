@@ -6,10 +6,10 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: release candidate `0.4.0`. The connection and read contract has been verified against
-> SAP HANA `2.00.088`; the new governance and pagination layer is covered by automated tests and
-> still requires a final end-to-end pass before publication. The package has not yet been
-> published to npm.
+> Status: `0.5.0` demonstration release. The package is public on npm with provenance and installs
+> by name on self-hosted n8n. The connection and read contract has been verified against SAP HANA
+> `2.00.088`; every new version should still pass a non-production HANA end-to-end test before it
+> is promoted to production.
 
 ## Why this node exists
 
@@ -26,7 +26,10 @@ This package:
 - supports credential-level schema, object, and column allowlists;
 - can force object-specific filters that callers and AI agents cannot remove;
 - supports typed filters, literal text matching, lists, ranges, and `AND`/`OR` logic;
+- loads governed schema, object, and column choices in the n8n editor;
+- reads exactly one row by a typed simple or composite key;
 - supports bounded keyset pagination for incremental reads;
+- returns each row as an item, all rows in one item, or enriches the incoming item;
 - enforces query timeouts and hard result limits, including catalog discovery;
 - escapes catalog-name wildcards and supports a literal object-name prefix;
 - enables TLS and certificate validation by default;
@@ -42,13 +45,13 @@ boundary.
 
 ## HANA SQL or OData?
 
-| Requirement | Prefer direct HANA SQL | Prefer OData / released SAP API |
-| --- | --- | --- |
-| Reconciliation, diagnostics, private reporting | Yes, through an approved view or exact read grant | Also valid when the released API contains the fields |
-| Read technical metadata or large analytical projections | Often | Sometimes |
-| Preserve SAP business validations and authorizations | No | Yes |
-| Create or change S/4 business documents | No | Yes |
-| Write into an integration-owned staging or queue table | Possible with a separate write credential and reviewed procedure | Optional |
+| Requirement                                             | Prefer direct HANA SQL                                           | Prefer OData / released SAP API                      |
+| ------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------- |
+| Reconciliation, diagnostics, private reporting          | Yes, through an approved view or exact read grant                | Also valid when the released API contains the fields |
+| Read technical metadata or large analytical projections | Often                                                            | Sometimes                                            |
+| Preserve SAP business validations and authorizations    | No                                                               | Yes                                                  |
+| Create or change S/4 business documents                 | No                                                               | Yes                                                  |
+| Write into an integration-owned staging or queue table  | Possible with a separate write credential and reviewed procedure | Optional                                             |
 
 Never use generic `INSERT`, `UPDATE`, or `DELETE` against internal S/4 application tables. Basic
 writes can be appropriate only for objects the integration owns, such as a staging table, queue,
@@ -67,13 +70,37 @@ as the HANA SQL port unless an administrator has explicitly configured a compati
 
 The node uses the Apache-2.0-licensed `hdb` driver maintained by SAP contributors. The driver is
 bundled into the published artifact, so users do not need to install a native HANA client.
-Version `2.27.1` is pinned for this pre-release because the `2.29.x` topology/physical-connection
+Version `2.27.1` is pinned because the `2.29.x` topology/physical-connection
 rewrite stalled authentication through the tested NAT endpoint. Compatibility with newer driver
 versions will be re-evaluated before a stable release.
 
 ## Installation
 
-### Local pre-release test
+### Install from the n8n editor
+
+On a self-hosted n8n instance, sign in as an Owner or Admin and open
+**Settings → Community Nodes → Install**. Enter:
+
+```text
+n8n-nodes-hana-secure
+```
+
+Accept the community-node warning and select **Install**. Create or open a workflow and search for
+**Logali HANA Guard**. To update later, return to **Settings → Community Nodes** and use the
+package's **Update** action.
+
+The instance must allow public community packages:
+
+```text
+N8N_COMMUNITY_PACKAGES_ENABLED=true
+N8N_UNVERIFIED_PACKAGES_ENABLED=true
+N8N_COMMUNITY_PACKAGES_PREVENT_LOADING=false
+```
+
+Persist `/home/node/.n8n` when n8n runs in Docker so the installed package survives container
+recreation. In queue mode, ensure the package is available to the main process and every worker.
+
+### Local development test
 
 From this repository:
 
@@ -84,22 +111,20 @@ npm run lint
 npm run build
 ```
 
-Run `npm pack` to create an installable tarball. Install the tarball only in a non-production,
-self-hosted n8n instance while the package is in pre-release.
+Run `npm pack` to create an installable tarball for a non-production test before publishing.
 
-### Install the pre-release tarball in Docker
+### Install a test tarball in Docker
 
-The package isn't on the npm registry yet, so it can't be installed by name from the n8n
-**Community Nodes** screen. Copy the tarball to the Docker host and replace `<n8n-container>` with
-the development container name:
+Copy the tarball to the Docker host and replace `<n8n-container>` with the development container
+name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.4.0.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.5.0.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.4.0.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.5.0.tgz
 exit
 
 docker restart <n8n-container>
@@ -113,16 +138,7 @@ docker exec -u node <n8n-container> sh -lc \
   'cd /home/node/.n8n/nodes && npm ls n8n-nodes-hana-secure'
 ```
 
-If n8n runs in queue mode, install the package in the main container and every worker, or build a
-custom n8n image containing the package. Keep these settings enabled:
-
-```text
-N8N_COMMUNITY_PACKAGES_ENABLED=true
-N8N_UNVERIFIED_PACKAGES_ENABLED=true
-N8N_COMMUNITY_PACKAGES_PREVENT_LOADING=false
-```
-
-To uninstall the pre-release:
+To uninstall the test tarball:
 
 ```bash
 docker exec -u node <n8n-container> sh -lc \
@@ -130,40 +146,33 @@ docker exec -u node <n8n-container> sh -lc \
 docker restart <n8n-container>
 ```
 
-### After npm publication
-
-In a self-hosted n8n instance, open **Settings → Community Nodes**, choose **Install**, and enter:
-
-```text
-n8n-nodes-hana-secure
-```
-
-Community nodes are not supported on n8n Cloud when they require external runtime capabilities.
+The direct SQL implementation requires TCP/TLS runtime capabilities and is intended for
+self-hosted n8n. It is not currently available as a verified n8n Cloud node.
 
 ## Credential configuration
 
 Create a **Logali HANA Guard API** credential with:
 
-| Field | Purpose |
-| --- | --- |
-| Host | HANA SQL endpoint hostname or IP address |
-| SQL Port | Tenant database SQL port |
-| Database Name | Optional tenant database name; leave empty when the endpoint already targets the tenant SQL port |
-| Ignore Server Topology | Keeps NAT, forwarded, proxy, and managed endpoints on the configured host; enabled by default |
-| Username / Password | Dedicated technical user; never use a broad administrator |
-| Use TLS | Encrypts the connection; enabled by default |
-| Validate TLS Certificate | Rejects untrusted certificates; enabled by default |
-| Custom CA Certificate | Optional PEM CA for a private certificate authority |
-| Allowed Schemas | Optional comma-separated schema allowlist |
-| Allowed Objects | Optional comma- or line-separated exact `SCHEMA.OBJECT` allowlist |
-| Column Policies JSON | Optional map of each object to the only columns it may expose or use |
-| Required Filters JSON | Object-specific row predicates always enforced with `AND` |
-| Allow Advanced Read-Only SQL | Opt-in switch for trusted workflows; disabled by default |
-| Allow AI Tool Use | Separate opt-in required before an AI Agent can call the Tool variant |
-| Allow AI Catalog Discovery | Separate opt-in for schema, object, and column discovery; disabled by default |
-| AI Tool Row Limit | Credential-level cap for each Tool call; 100 by default, maximum 1,000 |
-| AI Tool Result Size Limit | Serialized response cap; 256 KiB by default, maximum 5 MiB |
-| Connection / Query Timeout | Upper bounds for connection and query execution |
+| Field                        | Purpose                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| Host                         | HANA SQL endpoint hostname or IP address                                                         |
+| SQL Port                     | Tenant database SQL port                                                                         |
+| Database Name                | Optional tenant database name; leave empty when the endpoint already targets the tenant SQL port |
+| Ignore Server Topology       | Keeps NAT, forwarded, proxy, and managed endpoints on the configured host; enabled by default    |
+| Username / Password          | Dedicated technical user; never use a broad administrator                                        |
+| Use TLS                      | Encrypts the connection; enabled by default                                                      |
+| Validate TLS Certificate     | Rejects untrusted certificates; enabled by default                                               |
+| Custom CA Certificate        | Optional PEM CA for a private certificate authority                                              |
+| Allowed Schemas              | Optional comma-separated schema allowlist                                                        |
+| Allowed Objects              | Optional comma- or line-separated exact `SCHEMA.OBJECT` allowlist                                |
+| Column Policies JSON         | Optional map of each object to the only columns it may expose or use                             |
+| Required Filters JSON        | Object-specific row predicates always enforced with `AND`                                        |
+| Allow Advanced Read-Only SQL | Opt-in switch for trusted workflows; disabled by default                                         |
+| Allow AI Tool Use            | Separate opt-in required before an AI Agent can call the Tool variant                            |
+| Allow AI Catalog Discovery   | Separate opt-in for schema, object, and column discovery; disabled by default                    |
+| AI Tool Row Limit            | Credential-level cap for each Tool call; 100 by default, maximum 1,000                           |
+| AI Tool Result Size Limit    | Serialized response cap; 256 KiB by default, maximum 5 MiB                                       |
+| Connection / Query Timeout   | Upper bounds for connection and query execution                                                  |
 
 Use **Test** in the credential dialog, or the node's **Connection → Test Connection** operation.
 
@@ -181,10 +190,10 @@ Policies use exact, unquoted HANA identifiers. For example:
 
 ```json
 {
-  "allowedSchemas": "TRAINING",
-  "allowedObjects": "TRAINING.GL_ITEMS,TRAINING.OPEN_ORDERS",
-  "columnPoliciesJson": "{\"TRAINING.GL_ITEMS\":[\"MANDT\",\"COMPANY_CODE\",\"AMOUNT\",\"CURRENCY\"]}",
-  "requiredFiltersJson": "{\"TRAINING.GL_ITEMS\":[{\"column\":\"MANDT\",\"operator\":\"eq\",\"value\":\"250\"}]}"
+	"allowedSchemas": "TRAINING",
+	"allowedObjects": "TRAINING.GL_ITEMS,TRAINING.OPEN_ORDERS",
+	"columnPoliciesJson": "{\"TRAINING.GL_ITEMS\":[\"MANDT\",\"COMPANY_CODE\",\"AMOUNT\",\"CURRENCY\"]}",
+	"requiredFiltersJson": "{\"TRAINING.GL_ITEMS\":[{\"column\":\"MANDT\",\"operator\":\"eq\",\"value\":\"250\"}]}"
 }
 ```
 
@@ -222,18 +231,30 @@ user or database administrator account into n8n.
 - **Describe Table or View**: returns approved column metadata, including comments and defaults
   when the HANA catalog version exposes them.
 
+Schema, object, filter-column, sort-column, cursor-column, aggregate-column, and key-column fields
+load their choices from HANA. The choices apply the same schema, object, and column policies as
+execution, so the editor does not advertise objects the credential is not allowed to use.
+
 ### Row
 
 - **Select Rows**: choose governed columns, typed filters, sorting, a row limit, and optional
   keyset pagination without writing SQL. Start with **First Keyset Page** and a unique cursor
   column; a truncated page returns `hasMore` and `nextCursor`. Pass that value to **Continue After
   Cursor (Keyset)** for the following page.
+- **Get One by Key**: provide one or more typed equality fields for a simple or composite key. The
+  operation returns at most one row and fails when an incomplete key matches multiple rows.
 - **Aggregate Rows**: use `COUNT`, `COUNT DISTINCT`, `SUM`, `AVG`, `MIN`, or `MAX`, with optional
   grouping and filters.
 
 User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`NOT LIKE`, literal
 contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values
 remain prepared-statement parameters; identifiers remain validated and quoted.
+
+Node version `1.2` also provides three output modes:
+
+- **Each Row as an Item** for normal n8n item-by-item processing;
+- **All Rows in One Item** for a bounded array such as a report or AI context input;
+- **Add Rows to Input Item** to preserve upstream context and enrich it under a chosen field.
 
 ### SQL (Advanced)
 
@@ -263,7 +284,7 @@ the only boundary for advanced reads.
 
 ## AI Agent Tool
 
-Version `0.4.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
+Version `0.5.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
 AI Agent's **Tool** connector and configure one approved operation exactly as you would configure
 the normal node.
 
@@ -271,7 +292,7 @@ Recommended pattern:
 
 1. Use a HANA account with exact `SELECT` grants plus schema, object, column, and row policies.
 2. Enable **Allow AI Tool Use** and set conservative row and byte limits in the credential.
-3. Choose **Row → Select Rows** or **Aggregate Rows** in the Tool node.
+3. Choose **Row → Select Rows**, **Get One by Key**, or **Aggregate Rows** in the Tool node.
 4. Fix the schema, table/view, columns, sorting, and ordinary filters in the workflow.
 5. Let the model supply only narrowly described filter values when needed; keep identifiers fixed.
 6. Give the Tool a specific description that says what data it returns and when to call it.
@@ -287,6 +308,10 @@ wide value from silently expanding the agent's database or context surface.
 [`examples/415_hana_secure_readonly.json`](examples/415_hana_secure_readonly.json) contains a
 sanitized workflow with no credentials, hosts, user names, or internal identifiers. After import,
 attach your own credential and replace the training schema and view names.
+
+[`examples/hana-guard-demo-0.5.json`](examples/hana-guard-demo-0.5.json) demonstrates a composite
+key lookup and input-item enrichment with node version `1.2`. It is sanitized and intentionally
+contains no credential binding.
 
 The webinar examples are also sanitized:
 
@@ -334,10 +359,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and
 [CHANGELOG.md](CHANGELOG.md).
 
 The public repository is
-`https://github.com/Logali-Group/n8n-nodes-hana-secure`. The first npm publication requires a
-Logali-owned npm account; after that bootstrap release, configure npm Trusted Publishing for the
-public GitHub repository and `publish.yml`. Subsequent version tags publish through short-lived
-OIDC credentials with provenance instead of a long-lived npm token.
+`https://github.com/Logali-Group/n8n-nodes-hana-secure`. npm Trusted Publishing is configured for
+the public GitHub repository and `publish.yml`; version tags publish through short-lived OIDC
+credentials with provenance instead of a long-lived npm token.
 
 ## License and trademarks
 

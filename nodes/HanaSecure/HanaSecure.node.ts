@@ -5,14 +5,16 @@ import {
 	type ICredentialDataDecryptedObject,
 	type ICredentialTestFunctions,
 	type ICredentialsDecrypted,
-	type IDataObject,
 	type IExecuteFunctions,
+	type ILoadOptionsFunctions,
 	type INodeCredentialTestResult,
 	type INodeExecutionData,
+	type INodePropertyOptions,
 	type INodeType,
 	type INodeTypeDescription,
 } from 'n8n-workflow';
 
+import { loadColumnOptions, loadObjectOptions, loadSchemaOptions } from './catalogOptions';
 import { withHanaClient, type HanaSession } from './hanaClient';
 import {
 	allowedObjectNamesForSchema,
@@ -28,6 +30,7 @@ import {
 	validateGovernanceConfiguration,
 } from './governance';
 import { rowsToJson } from './json';
+import { formatHanaOutput, type HanaOutputMode } from './output';
 import { readCursorValue } from './pagination';
 import {
 	assertIdentifier,
@@ -36,6 +39,7 @@ import {
 	buildWhereClause,
 	combineWhereClauses,
 	normalizeUiFilters,
+	normalizeUiKeyFields,
 	parseAllowedSchemas,
 	parseIdentifierList,
 	parseParametersJson,
@@ -43,7 +47,14 @@ import {
 	quoteIdentifier,
 	validateAdvancedSelect,
 } from './sqlSafety';
-import type { FilterLogic, FilterValueType, HanaCredentials, OrderBy, UiFilter } from './types';
+import type {
+	FilterLogic,
+	FilterValueType,
+	HanaCredentials,
+	OrderBy,
+	UiFilter,
+	UiKeyField,
+} from './types';
 import { enforceAiToolByteLimit, resolveAiToolPolicy } from './toolPolicy';
 
 const MAX_ROW_LIMIT = 1000;
@@ -249,6 +260,51 @@ async function executeRowsOperation(
 		requiredFilterCount: requiredFilters.length,
 	};
 
+	if (operation === 'getByKey') {
+		const keyFields = valuesFromCollection<UiKeyField>(
+			context.getNodeParameter('keyFields', itemIndex, {}),
+		);
+		const normalizedKeys = normalizeUiKeyFields(keyFields);
+		assertColumnsAllowed(
+			normalizedKeys.map((filter) => filter.column),
+			allowedColumns,
+		);
+
+		const rawColumns = context.getNodeParameter('columns', itemIndex) as string;
+		const selectedColumns =
+			rawColumns.trim() === '*' ? allowedColumns : parseIdentifierList(rawColumns, 'column');
+		if (selectedColumns) assertColumnsAllowed(selectedColumns, allowedColumns);
+		const columns = selectedColumns
+			? selectedColumns.map((column) => quoteIdentifier(column)).join(', ')
+			: '*';
+		const keyWhere = buildWhereClause(normalizedKeys, 'AND');
+		const where = combineWhereClauses(requiredWhere, keyWhere);
+		const queryStartedAt = Date.now();
+		const rows = await session.query(
+			`SELECT ${columns} FROM ${tableReference}${where.sql} LIMIT 2`,
+			where.parameters,
+		);
+		const durationMs = Date.now() - queryStartedAt;
+		if (rows.length > 1) {
+			throw new OperationalError(
+				'Get One by Key matched more than one row. Add every column from the unique or business key.',
+			);
+		}
+		const failIfNotFound = context.getNodeParameter('failIfNotFound', itemIndex, true) as boolean;
+		if (rows.length === 0 && failIfNotFound) {
+			throw new OperationalError('No HANA row matched the complete key.');
+		}
+		const includeMetadata =
+			rows.length === 0 ||
+			(context.getNodeParameter('includeMetadata', itemIndex, true) as boolean);
+		return addResultMetadata(rows, operation, 1, includeMetadata, {
+			...policyMetadata,
+			durationMs,
+			found: rows.length === 1,
+			keyColumns: normalizedKeys.map((filter) => filter.column),
+		});
+	}
+
 	if (operation === 'select') {
 		const rawColumns = context.getNodeParameter('columns', itemIndex) as string;
 		const selectedColumns =
@@ -400,7 +456,7 @@ export class HanaSecure implements INodeType {
 			dark: 'file:logaliHanaGuard-v023.dark.svg',
 		},
 		group: ['input'],
-		version: [1, 1.1],
+		version: [1, 1.1, 1.2],
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
 		description: 'Read SAP HANA data with explicit security guardrails by Logali Group',
 		usableAsTool: {
@@ -485,6 +541,13 @@ export class HanaSecure implements INodeType {
 						description: 'Read rows with validated identifiers and bound filter values',
 					},
 					{
+						name: 'Get One by Key',
+						value: 'getByKey',
+						action: 'Get one row by key',
+						description:
+							'Read exactly one row using one or more equality key fields; duplicate matches fail closed',
+					},
+					{
 						name: 'Aggregate Rows',
 						value: 'aggregate',
 						action: 'Aggregate rows',
@@ -510,13 +573,14 @@ export class HanaSecure implements INodeType {
 				default: 'executeSelect',
 			},
 			{
-				displayName: 'Schema',
+				displayName: 'Schema Name or ID',
 				name: 'schema',
-				type: 'string',
+				type: 'options',
+				typeOptions: { loadOptionsMethod: 'getSchemas' },
 				default: '',
 				required: true,
-				placeholder: 'TRAINING',
-				description: 'Schema containing the table or view',
+				description:
+					'Schema containing the table or view. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						resource: ['catalog'],
@@ -548,13 +612,14 @@ export class HanaSecure implements INodeType {
 				},
 			},
 			{
-				displayName: 'Schema',
+				displayName: 'Schema Name or ID',
 				name: 'schema',
-				type: 'string',
+				type: 'options',
+				typeOptions: { loadOptionsMethod: 'getSchemas' },
 				default: '',
 				required: true,
-				placeholder: 'TRAINING',
-				description: 'Schema containing the table or view',
+				description:
+					'Schema containing the table or view. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: { show: { resource: ['rows'] } },
 			},
 			{
@@ -571,12 +636,17 @@ export class HanaSecure implements INodeType {
 				},
 			},
 			{
-				displayName: 'Table or View Name',
+				displayName: 'Table or View Name or ID',
 				name: 'objectName',
-				type: 'string',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getObjects',
+					loadOptionsDependsOn: ['schema'],
+				},
 				default: '',
 				required: true,
-				description: 'Unquoted table or view name',
+				description:
+					'Approved table or view. The list is filtered by Allowed Objects when configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						resource: ['catalog'],
@@ -585,12 +655,17 @@ export class HanaSecure implements INodeType {
 				},
 			},
 			{
-				displayName: 'Table or View Name',
+				displayName: 'Table or View Name or ID',
 				name: 'objectName',
-				type: 'string',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getObjects',
+					loadOptionsDependsOn: ['schema'],
+				},
 				default: '',
 				required: true,
-				description: 'Unquoted table or view name',
+				description:
+					'Approved table or view. The list is filtered by Allowed Objects when configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: { show: { resource: ['rows'] } },
 			},
 			{
@@ -599,7 +674,7 @@ export class HanaSecure implements INodeType {
 				type: 'string',
 				default: '*',
 				description: 'Comma-separated column names, or * for all columns',
-				displayOptions: { show: { resource: ['rows'], operation: ['select'] } },
+				displayOptions: { show: { resource: ['rows'], operation: ['select', 'getByKey'] } },
 			},
 			{
 				displayName: 'Filter Logic',
@@ -612,7 +687,7 @@ export class HanaSecure implements INodeType {
 				default: 'AND',
 				description:
 					'How user-defined filters are combined. Credential-required filters are always enforced with AND.',
-				displayOptions: { show: { resource: ['rows'] } },
+				displayOptions: { show: { resource: ['rows'], operation: ['select', 'aggregate'] } },
 			},
 			{
 				displayName: 'Filters',
@@ -621,16 +696,22 @@ export class HanaSecure implements INodeType {
 				typeOptions: { multipleValues: true },
 				default: {},
 				placeholder: 'Add Filter',
-				displayOptions: { show: { resource: ['rows'] } },
+				displayOptions: { show: { resource: ['rows'], operation: ['select', 'aggregate'] } },
 				options: [
 					{
 						displayName: 'Values',
 						name: 'values',
 						values: [
 							{
-								displayName: 'Column',
+								displayName: 'Column Name or ID',
 								name: 'column',
-								type: 'string',
+								type: 'options',
+								description:
+									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+								typeOptions: {
+									loadOptionsMethod: 'getColumns',
+									loadOptionsDependsOn: ['schema', 'objectName'],
+								},
 								default: '',
 								required: true,
 							},
@@ -704,6 +785,65 @@ export class HanaSecure implements INodeType {
 				],
 			},
 			{
+				displayName: 'Key Fields',
+				name: 'keyFields',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true },
+				default: {},
+				placeholder: 'Add Key Field',
+				description:
+					'One or more equality fields that identify a single row. Composite business keys are supported.',
+				displayOptions: { show: { resource: ['rows'], operation: ['getByKey'] } },
+				options: [
+					{
+						displayName: 'Values',
+						name: 'values',
+						values: [
+							{
+								displayName: 'Column Name or ID',
+								name: 'column',
+								type: 'options',
+								description:
+									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+								typeOptions: {
+									loadOptionsMethod: 'getColumns',
+									loadOptionsDependsOn: ['schema', 'objectName'],
+								},
+								default: '',
+								required: true,
+							},
+							{
+								displayName: 'Value',
+								name: 'value',
+								type: 'string',
+								default: '',
+								required: true,
+								description: 'Value bound to HANA as a prepared-statement parameter',
+							},
+							{
+								displayName: 'Value Type',
+								name: 'valueType',
+								type: 'options',
+								options: [
+									{ name: 'Boolean', value: 'boolean' },
+									{ name: 'Number', value: 'number' },
+									{ name: 'String / Date / Timestamp', value: 'string' },
+								],
+								default: 'string',
+							},
+						],
+					},
+				],
+			},
+			{
+				displayName: 'Fail If Not Found',
+				name: 'failIfNotFound',
+				type: 'boolean',
+				default: true,
+				description: 'Whether to stop the workflow when no row matches the complete key',
+				displayOptions: { show: { resource: ['rows'], operation: ['getByKey'] } },
+			},
+			{
 				displayName: 'Pagination Mode',
 				name: 'paginationMode',
 				type: 'options',
@@ -718,14 +858,18 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['rows'], operation: ['select'] } },
 			},
 			{
-				displayName: 'Cursor Column',
+				displayName: 'Cursor Column Name or ID',
 				name: 'cursorColumn',
-				type: 'string',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getColumns',
+					loadOptionsDependsOn: ['schema', 'objectName'],
+				},
 				default: '',
 				required: true,
 				placeholder: 'CHANGED_AT',
 				description:
-					'Unique, sortable column used to continue after the previous page; include it in Columns',
+					'Unique, sortable column used to continue after the previous page; include it in Columns. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						resource: ['rows'],
@@ -798,9 +942,15 @@ export class HanaSecure implements INodeType {
 						name: 'values',
 						values: [
 							{
-								displayName: 'Column',
+								displayName: 'Column Name or ID',
 								name: 'column',
-								type: 'string',
+								type: 'options',
+								description:
+									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+								typeOptions: {
+									loadOptionsMethod: 'getColumns',
+									loadOptionsDependsOn: ['schema', 'objectName'],
+								},
 								default: '',
 								required: true,
 							},
@@ -834,12 +984,17 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['rows'], operation: ['aggregate'] } },
 			},
 			{
-				displayName: 'Aggregate Column',
+				displayName: 'Aggregate Column Name or ID',
 				name: 'aggregateColumn',
-				type: 'string',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getColumns',
+					loadOptionsDependsOn: ['schema', 'objectName'],
+				},
 				default: '',
 				required: true,
-				description: 'Numeric or comparable column to aggregate',
+				description:
+					'Numeric or comparable column to aggregate. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						resource: ['rows'],
@@ -903,10 +1058,101 @@ export class HanaSecure implements INodeType {
 				hint: 'Keyset pagination always includes metadata so the next cursor is available.',
 				displayOptions: { show: { resource: ['rows', 'sql'] } },
 			},
+			{
+				displayName: 'Output Mode',
+				name: 'outputMode',
+				type: 'options',
+				options: [
+					{
+						name: 'Each Row as an Item',
+						value: 'eachRow',
+						description: 'Return one n8n item for every HANA row',
+					},
+					{
+						name: 'All Rows in One Item',
+						value: 'singleItem',
+						description: 'Return one item containing the complete bounded result array',
+					},
+					{
+						name: 'Add Rows to Input Item',
+						value: 'addToInput',
+						description: 'Keep the incoming item and add the bounded result array to it',
+					},
+				],
+				default: 'eachRow',
+				description: 'How HANA rows are represented in the n8n output',
+				displayOptions: { show: { '@version': [{ _cnd: { gte: 1.2 } }] } },
+			},
+			{
+				displayName: 'Result Field',
+				name: 'resultField',
+				type: 'string',
+				default: 'hanaRows',
+				required: true,
+				description: 'Top-level field that receives the array of HANA rows',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.2 } }],
+						outputMode: ['singleItem', 'addToInput'],
+					},
+				},
+			},
 		],
 	};
 
 	methods = {
+		loadOptions: {
+			async getSchemas(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				try {
+					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
+					validateGovernanceConfiguration(credentials);
+					return await withHanaClient(
+						credentials,
+						async (session) => await loadSchemaOptions(session, credentials),
+					);
+				} catch (error) {
+					throw new NodeOperationError(
+						this.getNode(),
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
+			},
+			async getObjects(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
+				if (!schema) return [];
+				try {
+					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
+					validateGovernanceConfiguration(credentials);
+					return await withHanaClient(
+						credentials,
+						async (session) => await loadObjectOptions(session, credentials, schema),
+					);
+				} catch (error) {
+					throw new NodeOperationError(
+						this.getNode(),
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
+			},
+			async getColumns(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
+				const objectName = String(this.getCurrentNodeParameter('objectName') ?? '').trim();
+				if (!schema || !objectName) return [];
+				try {
+					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
+					validateGovernanceConfiguration(credentials);
+					return await withHanaClient(
+						credentials,
+						async (session) => await loadColumnOptions(session, credentials, schema, objectName),
+					);
+				} catch (error) {
+					throw new NodeOperationError(
+						this.getNode(),
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
+			},
+		},
 		credentialTest: {
 			async hanaConnectionTest(
 				this: ICredentialTestFunctions,
@@ -995,11 +1241,22 @@ export class HanaSecure implements INodeType {
 
 				const jsonResult = rowsToJson(result);
 				enforceAiToolByteLimit(jsonResult, aiToolPolicy.maxBytes);
+				const outputMode =
+					this.getNode().typeVersion >= 1.2
+						? (this.getNodeParameter('outputMode', itemIndex, 'eachRow') as HanaOutputMode)
+						: 'eachRow';
+				const resultField =
+					outputMode === 'eachRow'
+						? 'hanaRows'
+						: (this.getNodeParameter('resultField', itemIndex, 'hanaRows') as string);
 				outputItems.push(
-					...jsonResult.map((json) => ({
-						json: json as IDataObject,
-						pairedItem: { item: itemIndex },
-					})),
+					...formatHanaOutput(
+						inputItems[itemIndex],
+						jsonResult,
+						itemIndex,
+						outputMode,
+						resultField,
+					),
 				);
 			} catch (error) {
 				if (this.continueOnFail()) {

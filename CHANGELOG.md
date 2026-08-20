@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-08-20
+
+### Added
+
+- Load governed schemas, tables, views, and column choices directly from HANA in the node editor.
+- Add **Get One by Key** with typed simple or composite equality keys and duplicate detection.
+- Add three output modes: one item per row, all rows in one item, or rows added to the input item.
+- Add a sanitized demo workflow for key lookup and input enrichment.
+
+### Changed
+
+- Update the installation guide for the public npm package and Trusted Publishing release flow.
+- Mark node version `1.2` as the current version while retaining versions `1` and `1.1`.
+
+### Security
+
+- Apply object, column, and credential-required row policies to dynamic editor choices and key reads.
+- Reject duplicate key fields, non-unique key matches, and unsafe output field names.
+
 ## [0.4.0] - 2026-08-20
 
 ### Added

@@ -11,6 +11,7 @@ const AI_TOOL_NODE_TYPE = /(?:^|\.)hanaSecureTool$/;
 const AI_TOOL_ALLOWED_OPERATIONS = new Set([
 	'connection:testConnection',
 	'rows:select',
+	'rows:getByKey',
 	'rows:aggregate',
 ]);
 

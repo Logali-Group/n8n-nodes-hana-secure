@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-Only the latest published minor version receives security fixes. Version `0.4.0` is a release
-candidate and must be tested in a non-production, self-hosted n8n instance until publication.
+Only the latest published minor version receives security fixes. Version `0.5.0` must be tested in
+a non-production, self-hosted n8n instance before being promoted to production.
 
 ## Reporting a vulnerability
 
@@ -52,7 +52,7 @@ privileges.
 - Prefer a curated reporting schema or calculation views over unrestricted business tables.
 - Treat catalog visibility and object read permission as different controls. A user that can see
   `SAPHANADB.T001` in system metadata may still—and usually should—receive `insufficient
-  privilege` when selecting its rows.
+privilege` when selecting its rows.
 - Keep TLS certificate validation enabled. If a private CA is used, provide only the CA
   certificate, never a private key.
 - Do not expose a HANA SQL port publicly merely to simplify a training exercise.
@@ -71,7 +71,7 @@ prove that arbitrary nested SQL preserves every structured governance rule.
 
 ## MCP and AI tools
 
-Version `0.4.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
+Version `0.5.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
 generated variant refuses to run unless **Allow AI Tool Use** is enabled in the credential. It
 supports Connection and structured Row operations, applies credential-level row and byte caps,
 and rejects SQL (Advanced) unconditionally. Catalog discovery requires a second explicit switch.

@@ -66,6 +66,18 @@ describe('AI tool policy', () => {
 		);
 	});
 
+	it('allows the bounded get-by-key operation for AI tools', () => {
+		const policy = resolveAiToolPolicy(
+			'n8n-nodes-hana-secure.hanaSecureTool',
+			1.2,
+			'rows',
+			'getByKey',
+			{ ...credentials, aiToolMaxRows: undefined },
+		);
+		assert.equal(policy.isTool, true);
+		assert.equal(policy.maxRows, 100);
+	});
+
 	it('uses a conservative default cap for upgraded credentials', () => {
 		const policy = resolveAiToolPolicy(
 			'n8n-nodes-hana-secure.hanaSecureTool',
