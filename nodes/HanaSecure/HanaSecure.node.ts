@@ -14,7 +14,14 @@ import {
 	type INodeTypeDescription,
 } from 'n8n-workflow';
 
-import { loadColumnOptions, loadObjectOptions, loadSchemaOptions } from './catalogOptions';
+import {
+	loadColumnOptions,
+	loadObjectOptions,
+	loadSchemaOptions,
+	loadTableFunctionColumnOptions,
+	loadTableFunctionOptions,
+	loadTableFunctionParameterOptions,
+} from './catalogOptions';
 import { hanaErrorOutput } from './errors';
 import { withHanaClient, type HanaSession } from './hanaClient';
 import {
@@ -47,6 +54,11 @@ import {
 	type SemanticParameterMode,
 } from './semanticViews';
 import {
+	buildTableFunctionSource,
+	type TableFunctionInput,
+	type TableFunctionParameterMetadata,
+} from './tableFunctions';
+import {
 	assertIdentifier,
 	assertSchemaAllowed,
 	buildOrderByClause,
@@ -72,6 +84,49 @@ import type {
 import { enforceAiToolByteLimit, resolveAiToolPolicy } from './toolPolicy';
 
 const MAX_ROW_LIMIT = 1000;
+
+async function readTableFunction(
+	session: HanaSession,
+	schema: string,
+	functionName: string,
+): Promise<{
+	definition: Record<string, unknown>;
+	inputs: TableFunctionParameterMetadata[];
+	outputColumns: Record<string, unknown>[];
+}> {
+	const functions = await session.query(
+		`SELECT "SCHEMA_NAME", "FUNCTION_NAME", "SQL_SECURITY", "INPUT_PARAMETER_COUNT", "RETURN_VALUE_COUNT", "IS_DETERMINISTIC", "OWNER_NAME", "CREATE_TIME"
+FROM "SYS"."FUNCTIONS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" = ? AND "FUNCTION_USAGE_TYPE" = 'TABLE' AND "IS_VALID" = 'TRUE'`,
+		[schema, functionName],
+	);
+	if (functions.length !== 1) {
+		throw new OperationalError('The selected valid HANA table function is not visible.');
+	}
+	const parameterRows = await session.query(
+		`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "LENGTH", "SCALE", "POSITION", "PARAMETER_TYPE", "HAS_DEFAULT_VALUE", "IS_NULLABLE"
+FROM "SYS"."FUNCTION_PARAMETERS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" = ?
+ORDER BY "POSITION"`,
+		[schema, functionName],
+	);
+	const inputs = parameterRows
+		.filter((row) => ['IN', 'INOUT'].includes(String(row.PARAMETER_TYPE).toUpperCase()))
+		.map((row) => ({
+			name: String(row.PARAMETER_NAME),
+			dataTypeName: String(row.DATA_TYPE_NAME),
+			position: Number(row.POSITION),
+			parameterType: String(row.PARAMETER_TYPE),
+		}));
+	const outputColumns = await session.query(
+		`SELECT "PARAMETER_NAME", "PARAMETER_POSITION", "COLUMN_NAME", "POSITION", "DATA_TYPE_NAME", "LENGTH", "SCALE", "IS_NULLABLE"
+FROM "SYS"."FUNCTION_PARAMETER_COLUMNS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" = ?
+ORDER BY "PARAMETER_POSITION", "POSITION"`,
+		[schema, functionName],
+	);
+	return { definition: functions[0], inputs, outputColumns };
+}
 
 function rowLimit(value: number, policyMaximum = MAX_ROW_LIMIT): number {
 	if (!Number.isInteger(value) || value < 1 || value > MAX_ROW_LIMIT) {
@@ -188,6 +243,74 @@ LIMIT ${limit + 1}`,
 		return addResultMetadata(governedRows, operation, limit, true, {
 			objectAllowlistApplied: allowedObjects.size > 0,
 		});
+	}
+	if (operation === 'listTableFunctions') {
+		const prefix = context.getNodeParameter('objectNamePrefix', itemIndex, '') as string;
+		const limit = rowLimit(
+			context.getNodeParameter('catalogLimit', itemIndex, 100) as number,
+			aiToolMaxRows,
+		);
+		const escapedPrefix = prefix.replace(/[\\%_]/g, '\\$&');
+		const governedNames = allowedObjectNamesForSchema(schema, allowedObjects);
+		if (aiToolMaxRows !== undefined && allowedObjects.size === 0) {
+			return addResultMetadata([], operation, limit, true, {
+				objectAllowlistApplied: false,
+				functionAllowlistRequiredForAi: true,
+			});
+		}
+		if (governedNames?.length === 0) {
+			return addResultMetadata([], operation, limit, true, { objectAllowlistApplied: true });
+		}
+		const namePredicate = governedNames
+			? ` AND "FUNCTION_NAME" IN (${governedNames.map(() => '?').join(', ')})`
+			: '';
+		const rows = await session.query(
+			`SELECT "SCHEMA_NAME", "FUNCTION_NAME", "SQL_SECURITY", "INPUT_PARAMETER_COUNT", "RETURN_VALUE_COUNT", "IS_DETERMINISTIC", "OWNER_NAME", "CREATE_TIME"
+FROM "SYS"."FUNCTIONS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" LIKE ? ESCAPE '\\' AND "FUNCTION_USAGE_TYPE" = 'TABLE' AND "IS_VALID" = 'TRUE'${namePredicate}
+ORDER BY "FUNCTION_NAME"
+LIMIT ${limit + 1}`,
+			governedNames
+				? [schema, `${escapedPrefix}%`, ...governedNames]
+				: [schema, `${escapedPrefix}%`],
+		);
+		const governedRows = rows.filter((row) =>
+			isObjectAllowed(schema, String(row.FUNCTION_NAME), allowedObjects),
+		);
+		return addResultMetadata(governedRows, operation, limit, true, {
+			objectAllowlistApplied: allowedObjects.size > 0,
+			functionUsageType: 'TABLE',
+		});
+	}
+	if (operation === 'describeTableFunction') {
+		if (aiToolMaxRows !== undefined && allowedObjects.size === 0) {
+			throw new OperationalError(
+				'AI Tool calls may describe table functions only when Allowed Objects explicitly lists them.',
+			);
+		}
+		const functionName = assertIdentifier(
+			context.getNodeParameter('functionName', itemIndex) as string,
+			'function name',
+		);
+		assertObjectAllowed(schema, functionName, allowedObjects);
+		const functionMetadata = await readTableFunction(session, schema, functionName);
+		const allowedColumns = allowedColumnsForObject(schema, functionName, columnPolicies);
+		const visibleOutputColumns = allowedColumns
+			? functionMetadata.outputColumns.filter((row) =>
+					allowedColumns.some(
+						(column) => column.toUpperCase() === String(row.COLUMN_NAME).toUpperCase(),
+					),
+				)
+			: functionMetadata.outputColumns;
+		return [
+			{
+				...functionMetadata.definition,
+				INPUT_PARAMETERS: functionMetadata.inputs,
+				OUTPUT_COLUMNS: visibleOutputColumns,
+				COLUMN_POLICY_APPLIED: allowedColumns !== undefined,
+				INVOCATION_PATTERN: `SELECT * FROM ${schema}.${functionName}(...)`,
+			},
+		];
 	}
 
 	const objectType = context.getNodeParameter('objectType', itemIndex, 'auto') as
@@ -396,9 +519,18 @@ async function executeRowsOperation(
 		context.getNodeParameter('schema', itemIndex) as string,
 		allowlist,
 	);
+	const sourceKind =
+		context.getNode().typeVersion >= 1.4
+			? (context.getNodeParameter('sourceKind', itemIndex, 'tableOrView') as
+					| 'tableOrView'
+					| 'tableFunction')
+			: 'tableOrView';
 	const objectName = assertIdentifier(
-		context.getNodeParameter('objectName', itemIndex) as string,
-		'object name',
+		context.getNodeParameter(
+			sourceKind === 'tableFunction' ? 'functionName' : 'objectName',
+			itemIndex,
+		) as string,
+		sourceKind === 'tableFunction' ? 'function name' : 'object name',
 	);
 	assertObjectAllowed(schema, objectName, allowedObjects);
 	const allowedColumns = allowedColumnsForObject(schema, objectName, columnPolicies);
@@ -415,7 +547,7 @@ async function executeRowsOperation(
 	const requiredWhere = buildWhereClause(requiredFilters, 'AND');
 	const limit = rowLimit(context.getNodeParameter('limit', itemIndex) as number, aiToolMaxRows);
 	const requestedSemanticParameterMode =
-		context.getNode().typeVersion >= 1.3
+		context.getNode().typeVersion >= 1.3 && sourceKind === 'tableOrView'
 			? (context.getNodeParameter('semanticParameterMode', itemIndex, 'auto') as
 					| SemanticParameterMode
 					| 'auto')
@@ -425,7 +557,7 @@ async function executeRowsOperation(
 	);
 	let semanticParameterMode: SemanticParameterMode =
 		requestedSemanticParameterMode === 'auto' ? 'none' : requestedSemanticParameterMode;
-	if (requestedSemanticParameterMode === 'auto') {
+	if (sourceKind === 'tableOrView' && requestedSemanticParameterMode === 'auto') {
 		const viewRows = await session.query(
 			`SELECT "VIEW_TYPE", "HAS_PARAMETERS" FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?`,
 			[schema, objectName],
@@ -445,17 +577,46 @@ async function executeRowsOperation(
 			}
 		}
 	}
-	const semanticSource = buildSemanticSource(
-		schema,
-		objectName,
-		semanticParameterMode,
-		semanticParameters,
-	);
-	const tableReference = semanticSource.sql;
-	const sourceParameters = semanticSource.parameters;
+	let tableReference: string;
+	let sourceParameters: unknown[];
+	let functionSecurity: unknown;
+	if (sourceKind === 'tableFunction') {
+		if (aiToolMaxRows !== undefined && allowedObjects.size === 0) {
+			throw new OperationalError(
+				'AI Tool calls may invoke table functions only when Allowed Objects explicitly lists them.',
+			);
+		}
+		const functionMetadata = await readTableFunction(session, schema, objectName);
+		const functionInputs = valuesFromCollection<TableFunctionInput>(
+			context.getNodeParameter('tableFunctionParameters', itemIndex, {}),
+		);
+		const functionSource = buildTableFunctionSource(
+			schema,
+			objectName,
+			functionInputs,
+			functionMetadata.inputs,
+		);
+		tableReference = functionSource.sql;
+		sourceParameters = functionSource.parameters;
+		functionSecurity = functionMetadata.definition.SQL_SECURITY;
+		semanticParameterMode = 'none';
+	} else {
+		const semanticSource = buildSemanticSource(
+			schema,
+			objectName,
+			semanticParameterMode,
+			semanticParameters,
+		);
+		tableReference = semanticSource.sql;
+		sourceParameters = semanticSource.parameters;
+	}
 	const policyMetadata = {
 		source: `${schema}.${objectName}`,
+		sourceKind,
 		semanticParameterMode,
+		...(sourceKind === 'tableFunction'
+			? { functionUsageType: 'TABLE', functionSecurity }
+			: {}),
 		objectAllowlistApplied: allowedObjects.size > 0,
 		columnPolicyApplied: allowedColumns !== undefined,
 		requiredFilterCount: requiredFilters.length,
@@ -856,7 +1017,7 @@ export class HanaSecure implements INodeType {
 			dark: 'file:logaliHanaGuard-v023.dark.svg',
 		},
 		group: ['input'],
-		version: [1, 1.1, 1.2, 1.3],
+		version: [1, 1.1, 1.2, 1.3, 1.4],
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
 		description: 'Read SAP HANA data with explicit security guardrails by Logali Group',
 		usableAsTool: {
@@ -915,6 +1076,12 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['catalog'] } },
 				options: [
 					{
+						name: 'Describe Table Function',
+						value: 'describeTableFunction',
+						action: 'Describe a table function',
+						description: 'Return table-function inputs, output columns, and security metadata',
+					},
+					{
 						name: 'Describe Table or View',
 						value: 'describeObject',
 						action: 'Describe a table or view',
@@ -945,6 +1112,12 @@ export class HanaSecure implements INodeType {
 						action: 'List semantic view parameters',
 						description:
 							'Discover positional SQL-view parameters or named calculation-view placeholders',
+					},
+					{
+						name: 'List Table Functions',
+						value: 'listTableFunctions',
+						action: 'List table functions',
+						description: 'List visible, valid HANA table functions in one allowed schema',
 					},
 					{
 						name: 'List Tables and Views',
@@ -1054,7 +1227,9 @@ export class HanaSecure implements INodeType {
 					show: {
 						resource: ['catalog'],
 						operation: [
+							'describeTableFunction',
 							'listObjects',
+							'listTableFunctions',
 							'describeObject',
 							'inspectSemanticView',
 							'listSemanticParameters',
@@ -1072,7 +1247,7 @@ export class HanaSecure implements INodeType {
 				description:
 					'Optional literal prefix used to narrow catalog discovery; wildcard characters are escaped',
 				displayOptions: {
-					show: { resource: ['catalog'], operation: ['listObjects'] },
+					show: { resource: ['catalog'], operation: ['listObjects', 'listTableFunctions'] },
 				},
 			},
 			{
@@ -1081,9 +1256,9 @@ export class HanaSecure implements INodeType {
 				type: 'number',
 				typeOptions: { minValue: 1, maxValue: MAX_ROW_LIMIT },
 				default: 100,
-				description: 'Maximum number of tables and views returned by catalog discovery',
+				description: 'Maximum number of objects returned by catalog discovery',
 				displayOptions: {
-					show: { resource: ['catalog'], operation: ['listObjects'] },
+					show: { resource: ['catalog'], operation: ['listObjects', 'listTableFunctions'] },
 				},
 			},
 			{
@@ -1096,6 +1271,21 @@ export class HanaSecure implements INodeType {
 				description:
 					'Schema containing the table or view. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: { show: { resource: ['rows'] } },
+			},
+			{
+				displayName: 'Row Source',
+				name: 'sourceKind',
+				type: 'options',
+				options: [
+					{ name: 'Table or View', value: 'tableOrView' },
+					{ name: 'HANA Table Function', value: 'tableFunction' },
+				],
+				default: 'tableOrView',
+				description:
+					'Table functions are invoked with prepared scalar inputs, then queried through the same row governance controls',
+				displayOptions: {
+					show: { '@version': [{ _cnd: { gte: 1.4 } }], resource: ['rows'] },
+				},
 			},
 			{
 				displayName: 'Object Type',
@@ -1136,6 +1326,21 @@ export class HanaSecure implements INodeType {
 				},
 			},
 			{
+				displayName: 'Table Function Name or ID',
+				name: 'functionName',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getTableFunctions',
+					loadOptionsDependsOn: ['schema'],
+				},
+				default: '',
+				required: true,
+				description: 'Approved valid HANA table function. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				displayOptions: {
+					show: { resource: ['catalog'], operation: ['describeTableFunction'] },
+				},
+			},
+			{
 				displayName: 'Table or View Name or ID',
 				name: 'objectName',
 				type: 'options',
@@ -1147,7 +1352,27 @@ export class HanaSecure implements INodeType {
 				required: true,
 				description:
 					'Approved table or view. The list is filtered by Allowed Objects when configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
-				displayOptions: { show: { resource: ['rows'] } },
+				displayOptions: { show: { resource: ['rows'], sourceKind: ['tableOrView'] } },
+			},
+			{
+				displayName: 'Table Function Name or ID',
+				name: 'functionName',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getTableFunctions',
+					loadOptionsDependsOn: ['schema'],
+				},
+				default: '',
+				required: true,
+				description:
+					'Approved valid HANA table function used as the row source. It must also be present in Allowed Objects when that policy is configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.4 } }],
+						resource: ['rows'],
+						sourceKind: ['tableFunction'],
+					},
+				},
 			},
 			{
 				displayName: 'Runtime View Parameters',
@@ -1169,6 +1394,7 @@ export class HanaSecure implements INodeType {
 					show: {
 						'@version': [{ _cnd: { gte: 1.3 } }],
 						resource: ['rows'],
+						sourceKind: ['tableOrView'],
 					},
 				},
 			},
@@ -1185,6 +1411,7 @@ export class HanaSecure implements INodeType {
 					show: {
 						'@version': [{ _cnd: { gte: 1.3 } }],
 						resource: ['rows'],
+						sourceKind: ['tableOrView'],
 						semanticParameterMode: ['auto', 'calculationPlaceholders', 'sqlPositional'],
 					},
 				},
@@ -1225,6 +1452,62 @@ export class HanaSecure implements INodeType {
 				],
 			},
 			{
+				displayName: 'Table Function Inputs',
+				name: 'tableFunctionParameters',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true },
+				default: {},
+				placeholder: 'Add Function Input',
+				description:
+					'Add every scalar input declared by the function. Names are matched case-insensitively and values are bound in catalog order.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.4 } }],
+						resource: ['rows'],
+						sourceKind: ['tableFunction'],
+					},
+				},
+				options: [
+					{
+						displayName: 'Values',
+						name: 'values',
+						values: [
+							{
+								displayName: 'Parameter Name or ID',
+								name: 'name',
+								type: 'options',
+								typeOptions: {
+									loadOptionsMethod: 'getTableFunctionParameters',
+									loadOptionsDependsOn: ['schema', 'functionName'],
+								},
+								default: '',
+								required: true,
+								description: 'Catalog-declared scalar input parameter. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+							},
+							{
+								displayName: 'Value',
+								name: 'value',
+								type: 'string',
+								default: '',
+								required: true,
+							},
+							{
+								displayName: 'Value Type',
+								name: 'valueType',
+								type: 'options',
+								options: [
+									{ name: 'Boolean', value: 'boolean' },
+									{ name: 'Null', value: 'null' },
+									{ name: 'Number', value: 'number' },
+									{ name: 'String / Date / Timestamp', value: 'string' },
+								],
+								default: 'string',
+							},
+						],
+					},
+				],
+			},
+			{
 				displayName: 'Columns',
 				name: 'columns',
 				type: 'string',
@@ -1244,7 +1527,7 @@ export class HanaSecure implements INodeType {
 				type: 'multiOptions',
 				typeOptions: {
 					loadOptionsMethod: 'getColumns',
-					loadOptionsDependsOn: ['schema', 'objectName'],
+					loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 				},
 				default: [],
 				description:
@@ -1301,7 +1584,7 @@ export class HanaSecure implements INodeType {
 									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 								typeOptions: {
 									loadOptionsMethod: 'getColumns',
-									loadOptionsDependsOn: ['schema', 'objectName'],
+									loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 								},
 								default: '',
 								required: true,
@@ -1398,7 +1681,7 @@ export class HanaSecure implements INodeType {
 									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 								typeOptions: {
 									loadOptionsMethod: 'getColumns',
-									loadOptionsDependsOn: ['schema', 'objectName'],
+									loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 								},
 								default: '',
 								required: true,
@@ -1481,7 +1764,7 @@ export class HanaSecure implements INodeType {
 				type: 'multiOptions',
 				typeOptions: {
 					loadOptionsMethod: 'getColumns',
-					loadOptionsDependsOn: ['schema', 'objectName'],
+					loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 				},
 				default: [],
 				required: true,
@@ -1551,7 +1834,7 @@ export class HanaSecure implements INodeType {
 				type: 'options',
 				typeOptions: {
 					loadOptionsMethod: 'getColumns',
-					loadOptionsDependsOn: ['schema', 'objectName'],
+					loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 				},
 				default: '',
 				required: true,
@@ -1640,7 +1923,7 @@ export class HanaSecure implements INodeType {
 									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 								typeOptions: {
 									loadOptionsMethod: 'getColumns',
-									loadOptionsDependsOn: ['schema', 'objectName'],
+									loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 								},
 								default: '',
 								required: true,
@@ -1686,7 +1969,7 @@ export class HanaSecure implements INodeType {
 				type: 'options',
 				typeOptions: {
 					loadOptionsMethod: 'getColumns',
-					loadOptionsDependsOn: ['schema', 'objectName'],
+					loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 				},
 				default: '',
 				required: true,
@@ -1772,7 +2055,7 @@ export class HanaSecure implements INodeType {
 									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 								typeOptions: {
 									loadOptionsMethod: 'getColumns',
-									loadOptionsDependsOn: ['schema', 'objectName'],
+									loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 								},
 								default: '',
 								displayOptions: { hide: { function: ['COUNT'] } },
@@ -1794,7 +2077,7 @@ export class HanaSecure implements INodeType {
 				type: 'multiOptions',
 				typeOptions: {
 					loadOptionsMethod: 'getColumns',
-					loadOptionsDependsOn: ['schema', 'objectName'],
+					loadOptionsDependsOn: ['schema', 'sourceKind', 'objectName', 'functionName'],
 				},
 				default: [],
 				description:
@@ -1967,16 +2250,76 @@ export class HanaSecure implements INodeType {
 					);
 				}
 			},
+			async getTableFunctions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
+				if (!schema) return [];
+				try {
+					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
+					validateGovernanceConfiguration(credentials);
+					return await withHanaClient(
+						credentials,
+						async (session) => await loadTableFunctionOptions(session, credentials, schema),
+					);
+				} catch (error) {
+					throw new NodeOperationError(
+						this.getNode(),
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
+			},
+			async getTableFunctionParameters(
+				this: ILoadOptionsFunctions,
+			): Promise<INodePropertyOptions[]> {
+				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
+				const functionName = String(
+					this.getCurrentNodeParameter('functionName') ?? '',
+				).trim();
+				if (!schema || !functionName) return [];
+				try {
+					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
+					validateGovernanceConfiguration(credentials);
+					return await withHanaClient(
+						credentials,
+						async (session) =>
+							await loadTableFunctionParameterOptions(
+								session,
+								credentials,
+								schema,
+								functionName,
+							),
+					);
+				} catch (error) {
+					throw new NodeOperationError(
+						this.getNode(),
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				}
+			},
 			async getColumns(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
-				const objectName = String(this.getCurrentNodeParameter('objectName') ?? '').trim();
+				const sourceKind = String(
+					this.getCurrentNodeParameter('sourceKind') ?? 'tableOrView',
+				);
+				const objectName = String(
+					this.getCurrentNodeParameter(
+						sourceKind === 'tableFunction' ? 'functionName' : 'objectName',
+					) ?? '',
+				).trim();
 				if (!schema || !objectName) return [];
 				try {
 					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
 					validateGovernanceConfiguration(credentials);
 					return await withHanaClient(
 						credentials,
-						async (session) => await loadColumnOptions(session, credentials, schema, objectName),
+						async (session) =>
+							sourceKind === 'tableFunction'
+								? await loadTableFunctionColumnOptions(
+										session,
+										credentials,
+										schema,
+										objectName,
+									)
+								: await loadColumnOptions(session, credentials, schema, objectName),
 					);
 				} catch (error) {
 					throw new NodeOperationError(

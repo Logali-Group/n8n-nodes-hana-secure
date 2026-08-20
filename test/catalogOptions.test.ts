@@ -5,6 +5,9 @@ import {
 	loadColumnOptions,
 	loadObjectOptions,
 	loadSchemaOptions,
+	loadTableFunctionColumnOptions,
+	loadTableFunctionOptions,
+	loadTableFunctionParameterOptions,
 } from '../nodes/HanaSecure/catalogOptions';
 import type { HanaSession } from '../nodes/HanaSecure/hanaClient';
 import type { HanaCredentials } from '../nodes/HanaSecure/types';
@@ -93,5 +96,62 @@ describe('dynamic governed catalog options', () => {
 			{ name: 'COMPANY_CODE (NVARCHAR)', value: 'COMPANY_CODE' },
 			{ name: 'AMOUNT (DECIMAL)', value: 'AMOUNT' },
 		]);
+	});
+
+	it('discovers only governed table functions', async () => {
+		const options = await loadTableFunctionOptions(
+			sessionWithRows([
+				{ FUNCTION_NAME: 'GET_OPEN_ORDERS', INPUT_PARAMETER_COUNT: 2, SQL_SECURITY: 'INVOKER' },
+				{ FUNCTION_NAME: 'PRIVATE_PAYROLL', INPUT_PARAMETER_COUNT: 1, SQL_SECURITY: 'DEFINER' },
+			]),
+			{
+				...baseCredentials,
+				allowedObjects: 'TRAINING.GET_OPEN_ORDERS',
+			},
+			'TRAINING',
+		);
+		assert.deepEqual(options, [
+			{
+				name: 'GET_OPEN_ORDERS (table function)',
+				value: 'GET_OPEN_ORDERS',
+				description: '2 input parameter(s); SQL security INVOKER',
+			},
+		]);
+	});
+
+	it('loads table-function inputs and governed output columns', async () => {
+		const credentials = {
+			...baseCredentials,
+			allowedObjects: 'TRAINING.GET_OPEN_ORDERS',
+			columnPoliciesJson: '{"TRAINING.GET_OPEN_ORDERS":["ORDER_ID","AMOUNT"]}',
+		};
+		assert.deepEqual(
+			await loadTableFunctionParameterOptions(
+				sessionWithRows([
+					{ PARAMETER_NAME: 'P_COMPANY_CODE', DATA_TYPE_NAME: 'NVARCHAR', POSITION: 1 },
+				]),
+				credentials,
+				'TRAINING',
+				'GET_OPEN_ORDERS',
+			),
+			[
+				{
+					name: 'P_COMPANY_CODE (NVARCHAR)',
+					value: 'P_COMPANY_CODE',
+				},
+			],
+		);
+		assert.deepEqual(
+			await loadTableFunctionColumnOptions(
+				sessionWithRows([
+					{ COLUMN_NAME: 'ORDER_ID', DATA_TYPE_NAME: 'NVARCHAR', POSITION: 1 },
+					{ COLUMN_NAME: 'PRIVATE_NOTE', DATA_TYPE_NAME: 'NVARCHAR', POSITION: 2 },
+				]),
+				credentials,
+				'TRAINING',
+				'GET_OPEN_ORDERS',
+			),
+			[{ name: 'ORDER_ID (NVARCHAR)', value: 'ORDER_ID' }],
+		);
 	});
 });

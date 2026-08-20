@@ -14,6 +14,61 @@ import type { HanaCredentials } from './types';
 
 const MAX_DYNAMIC_OPTIONS = 500;
 
+export async function loadTableFunctionOptions(
+	session: HanaSession,
+	credentials: HanaCredentials,
+	rawSchema: string,
+): Promise<INodePropertyOptions[]> {
+	const allowedSchemas = parseAllowedSchemas(credentials.allowedSchemas);
+	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
+	const schema = assertSchemaAllowed(rawSchema, allowedSchemas);
+	const governedNames = allowedObjectNamesForSchema(schema, allowedObjects);
+	if (governedNames?.length === 0) return [];
+	const namePredicate = governedNames
+		? ` AND "FUNCTION_NAME" IN (${governedNames.map(() => '?').join(', ')})`
+		: '';
+	const rows = await session.query(
+		`SELECT "FUNCTION_NAME", "SQL_SECURITY", "INPUT_PARAMETER_COUNT"
+FROM "SYS"."FUNCTIONS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_USAGE_TYPE" = 'TABLE' AND "IS_VALID" = 'TRUE'${namePredicate}
+ORDER BY "FUNCTION_NAME"
+LIMIT ${MAX_DYNAMIC_OPTIONS + 1}`,
+		governedNames ? [schema, ...governedNames] : [schema],
+	);
+	return rows
+		.filter((row) => isObjectAllowed(schema, String(row.FUNCTION_NAME), allowedObjects))
+		.slice(0, MAX_DYNAMIC_OPTIONS)
+		.map((row) => ({
+			name: `${String(row.FUNCTION_NAME)} (table function)`,
+			value: String(row.FUNCTION_NAME),
+			description: `${String(row.INPUT_PARAMETER_COUNT ?? 0)} input parameter(s); SQL security ${String(row.SQL_SECURITY ?? 'UNKNOWN')}`,
+		}));
+}
+
+export async function loadTableFunctionParameterOptions(
+	session: HanaSession,
+	credentials: HanaCredentials,
+	rawSchema: string,
+	rawFunctionName: string,
+): Promise<INodePropertyOptions[]> {
+	const allowedSchemas = parseAllowedSchemas(credentials.allowedSchemas);
+	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
+	const schema = assertSchemaAllowed(rawSchema, allowedSchemas);
+	const functionName = assertIdentifier(rawFunctionName, 'function name');
+	assertObjectAllowed(schema, functionName, allowedObjects);
+	const rows = await session.query(
+		`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "POSITION"
+FROM "SYS"."FUNCTION_PARAMETERS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" = ? AND "PARAMETER_TYPE" IN ('IN', 'INOUT')
+ORDER BY "POSITION"`,
+		[schema, functionName],
+	);
+	return rows.slice(0, 20).map((row) => ({
+		name: `${String(row.PARAMETER_NAME)} (${String(row.DATA_TYPE_NAME)})`,
+		value: String(row.PARAMETER_NAME),
+	}));
+}
+
 export async function loadSchemaOptions(
 	session: HanaSession,
 	credentials: HanaCredentials,
@@ -127,6 +182,38 @@ ORDER BY "POSITION"`,
 		? new Set(allowedColumns.map((column) => column.toUpperCase()))
 		: undefined;
 
+	return rows
+		.filter((row) => !allowed || allowed.has(String(row.COLUMN_NAME).toUpperCase()))
+		.slice(0, MAX_DYNAMIC_OPTIONS)
+		.map((row) => ({
+			name: `${String(row.COLUMN_NAME)} (${String(row.DATA_TYPE_NAME)})`,
+			value: String(row.COLUMN_NAME),
+		}));
+}
+
+export async function loadTableFunctionColumnOptions(
+	session: HanaSession,
+	credentials: HanaCredentials,
+	rawSchema: string,
+	rawFunctionName: string,
+): Promise<INodePropertyOptions[]> {
+	const allowedSchemas = parseAllowedSchemas(credentials.allowedSchemas);
+	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
+	const columnPolicies = parseColumnPolicies(credentials.columnPoliciesJson);
+	const schema = assertSchemaAllowed(rawSchema, allowedSchemas);
+	const functionName = assertIdentifier(rawFunctionName, 'function name');
+	assertObjectAllowed(schema, functionName, allowedObjects);
+	const rows = await session.query(
+		`SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"
+FROM "SYS"."FUNCTION_PARAMETER_COLUMNS"
+WHERE "SCHEMA_NAME" = ? AND "FUNCTION_NAME" = ?
+ORDER BY "PARAMETER_POSITION", "POSITION"`,
+		[schema, functionName],
+	);
+	const allowedColumns = allowedColumnsForObject(schema, functionName, columnPolicies);
+	const allowed = allowedColumns
+		? new Set(allowedColumns.map((column) => column.toUpperCase()))
+		: undefined;
 	return rows
 		.filter((row) => !allowed || allowed.has(String(row.COLUMN_NAME).toUpperCase()))
 		.slice(0, MAX_DYNAMIC_OPTIONS)

@@ -1,0 +1,94 @@
+{
+	"name": "Logali HANA Guard 0.7 - ABAP CDS country runtime",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "manual-trigger",
+			"name": "Run demo",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 80]
+		},
+		{
+			"parameters": {
+				"resource": "catalog",
+				"operation": "inspectSemanticView",
+				"schema": "SAPA4H",
+				"objectName": "ZN8NCOUNTRYP"
+			},
+			"id": "inspect-cds-runtime",
+			"name": "Inspect CDS runtime view",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.4,
+			"position": [300, -80]
+		},
+		{
+			"parameters": {
+				"resource": "rows",
+				"operation": "select",
+				"schema": "SAPA4H",
+				"sourceKind": "tableOrView",
+				"objectName": "ZN8NCOUNTRYP",
+				"semanticParameterMode": "sqlPositional",
+				"semanticParameters": {
+					"values": [
+						{
+							"name": "",
+							"value": "DE",
+							"valueType": "string"
+						}
+					]
+				},
+				"selectedColumns": [
+					"COUNTRY",
+					"COUNTRYTHREELETTERISOCODE",
+					"COUNTRYISOCODE",
+					"ISEUROPEANUNIONMEMBER"
+				],
+				"filterLogic": "AND",
+				"filters": { "values": [] },
+				"paginationMode": "none",
+				"orderBy": { "values": [] },
+				"limit": 5,
+				"includeMetadata": true,
+				"bigIntMode": "string",
+				"dateMode": "iso",
+				"binaryEncoding": "base64",
+				"maxResultBytes": 1048576,
+				"outputMode": "eachRow"
+			},
+			"id": "read-cds-runtime",
+			"name": "Read CDS runtime for DE",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.4,
+			"position": [300, 200]
+		},
+		{
+			"parameters": {
+				"content": "Attach a least-privilege HANA SQL credential. The example expects the generated runtime SQL view SAPA4H.ZN8NCOUNTRYP and does not contain an ADT or database credential. Adapt the SAP schema if your SID differs.",
+				"height": 220,
+				"width": 650
+			},
+			"id": "setup-note",
+			"name": "Safe CDS demo setup",
+			"type": "n8n-nodes-base.stickyNote",
+			"typeVersion": 1,
+			"position": [-20, -280]
+		}
+	],
+	"connections": {
+		"Run demo": {
+			"main": [
+				[
+					{ "node": "Inspect CDS runtime view", "type": "main", "index": 0 },
+					{ "node": "Read CDS runtime for DE", "type": "main", "index": 0 }
+				]
+			]
+		}
+	},
+	"active": false,
+	"settings": {},
+	"versionId": "11e72acf-4b17-4f4f-a385-67b78c7184f1",
+	"meta": { "templateCredsSetupCompleted": false },
+	"tags": []
+}
