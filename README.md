@@ -6,9 +6,10 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: release candidate `0.3.0`. Connection, catalog, metadata, guarded structured reads, and
-> the credential-gated AI Tool variant
-> have been tested against SAP HANA `2.00.088`. The package has not yet been published to npm.
+> Status: release candidate `0.4.0`. The connection and read contract has been verified against
+> SAP HANA `2.00.088`; the new governance and pagination layer is covered by automated tests and
+> still requires a final end-to-end pass before publication. The package has not yet been
+> published to npm.
 
 ## Why this node exists
 
@@ -22,7 +23,10 @@ This package:
 - reads data only;
 - binds filter values through prepared statements;
 - validates and quotes schema, object, and column identifiers;
-- supports a credential-level schema allowlist;
+- supports credential-level schema, object, and column allowlists;
+- can force object-specific filters that callers and AI agents cannot remove;
+- supports typed filters, literal text matching, lists, ranges, and `AND`/`OR` logic;
+- supports bounded keyset pagination for incremental reads;
 - enforces query timeouts and hard result limits, including catalog discovery;
 - escapes catalog-name wildcards and supports a literal object-name prefix;
 - enables TLS and certificate validation by default;
@@ -30,7 +34,8 @@ This package:
 - can be attached directly to an n8n AI Agent as **Logali HANA Guard Tool**;
 - requires a separate credential opt-in for AI Tool use;
 - blocks advanced SQL in the Tool variant even when normal workflows may use it;
-- caps every Tool response with a credential-level maximum (100 rows by default).
+- requires a separate opt-in before an AI Tool may discover catalog metadata;
+- caps every Tool response by both rows and serialized bytes.
 
 These controls are defense in depth. A least-privilege HANA user remains the primary security
 boundary.
@@ -89,12 +94,12 @@ The package isn't on the npm registry yet, so it can't be installed by name from
 the development container name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.3.0.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.4.0.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.3.0.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.4.0.tgz
 exit
 
 docker restart <n8n-container>
@@ -150,9 +155,14 @@ Create a **Logali HANA Guard API** credential with:
 | Validate TLS Certificate | Rejects untrusted certificates; enabled by default |
 | Custom CA Certificate | Optional PEM CA for a private certificate authority |
 | Allowed Schemas | Optional comma-separated schema allowlist |
+| Allowed Objects | Optional comma- or line-separated exact `SCHEMA.OBJECT` allowlist |
+| Column Policies JSON | Optional map of each object to the only columns it may expose or use |
+| Required Filters JSON | Object-specific row predicates always enforced with `AND` |
 | Allow Advanced Read-Only SQL | Opt-in switch for trusted workflows; disabled by default |
 | Allow AI Tool Use | Separate opt-in required before an AI Agent can call the Tool variant |
+| Allow AI Catalog Discovery | Separate opt-in for schema, object, and column discovery; disabled by default |
 | AI Tool Row Limit | Credential-level cap for each Tool call; 100 by default, maximum 1,000 |
+| AI Tool Result Size Limit | Serialized response cap; 256 KiB by default, maximum 5 MiB |
 | Connection / Query Timeout | Upper bounds for connection and query execution |
 
 Use **Test** in the credential dialog, or the node's **Connection → Test Connection** operation.
@@ -164,6 +174,27 @@ read from `SYS.M_DATABASE`. The same test account could see that the `SAPHANADB`
 tables existed but received `insufficient privilege` when it attempted to read `SAPHANADB.T001`.
 That is the intended lesson: catalog visibility and network reachability do not grant access to
 S/4 business rows.
+
+### Governance policy example
+
+Policies use exact, unquoted HANA identifiers. For example:
+
+```json
+{
+  "allowedSchemas": "TRAINING",
+  "allowedObjects": "TRAINING.GL_ITEMS,TRAINING.OPEN_ORDERS",
+  "columnPoliciesJson": "{\"TRAINING.GL_ITEMS\":[\"MANDT\",\"COMPANY_CODE\",\"AMOUNT\",\"CURRENCY\"]}",
+  "requiredFiltersJson": "{\"TRAINING.GL_ITEMS\":[{\"column\":\"MANDT\",\"operator\":\"eq\",\"value\":\"250\"}]}"
+}
+```
+
+When a column policy exists, `Columns = *` expands to the approved projection. The same policy
+also checks filter, sort, group, aggregate, and cursor columns. Required filters are parameterized
+and cannot be weakened by choosing `OR`; the node groups user filters separately and joins the
+credential filters with `AND`. A reusable sanitized file is available at
+[`examples/hana-guard-governance-policy.example.json`](examples/hana-guard-governance-policy.example.json).
+The credential test also rejects malformed JSON, policies outside the configured schema/object
+allowlists, required filters on forbidden columns, and invalid AI result limits before connecting.
 
 ### Recommended database account
 
@@ -188,13 +219,21 @@ user or database administrator account into n8n.
 - **List Schemas**: lists visible non-system schemas and applies the credential allowlist.
 - **List Tables and Views**: lists objects in one allowed schema, with an optional literal prefix
   and a result limit of 1–1,000 (100 by default).
-- **Describe Table or View**: returns column metadata from the HANA system catalog.
+- **Describe Table or View**: returns approved column metadata, including comments and defaults
+  when the HANA catalog version exposes them.
 
 ### Row
 
-- **Select Rows**: choose columns, filters, sorting, and a row limit without writing SQL.
-- **Aggregate Rows**: use `COUNT`, `SUM`, `AVG`, `MIN`, or `MAX`, with optional grouping and
-  filters.
+- **Select Rows**: choose governed columns, typed filters, sorting, a row limit, and optional
+  keyset pagination without writing SQL. Start with **First Keyset Page** and a unique cursor
+  column; a truncated page returns `hasMore` and `nextCursor`. Pass that value to **Continue After
+  Cursor (Keyset)** for the following page.
+- **Aggregate Rows**: use `COUNT`, `COUNT DISTINCT`, `SUM`, `AVG`, `MIN`, or `MAX`, with optional
+  grouping and filters.
+
+User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`NOT LIKE`, literal
+contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values
+remain prepared-statement parameters; identifiers remain validated and quoted.
 
 ### SQL (Advanced)
 
@@ -217,28 +256,31 @@ WHERE "COMPANY_CODE" = ? AND "FISCAL_YEAR" = ?
 ```
 
 The guard is not a substitute for database permissions. Enable advanced SQL only for trusted
-workflow editors.
+workflow editors. In node v1.1+, advanced SQL refuses credentials that contain schema, object,
+column, or required-filter policies: arbitrary SQL cannot reliably promise those structured
+boundaries. Use structured Row operations, or a separate database account whose exact grants are
+the only boundary for advanced reads.
 
 ## AI Agent Tool
 
-Version `0.3.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
+Version `0.4.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
 AI Agent's **Tool** connector and configure one approved operation exactly as you would configure
 the normal node.
 
 Recommended pattern:
 
-1. Use a HANA account with exact `SELECT` grants and an **Allowed Schemas** allowlist.
-2. Enable **Allow AI Tool Use** and set a conservative **AI Tool Row Limit** in the credential.
+1. Use a HANA account with exact `SELECT` grants plus schema, object, column, and row policies.
+2. Enable **Allow AI Tool Use** and set conservative row and byte limits in the credential.
 3. Choose **Row → Select Rows** or **Aggregate Rows** in the Tool node.
 4. Fix the schema, table/view, columns, sorting, and ordinary filters in the workflow.
 5. Let the model supply only narrowly described filter values when needed; keep identifiers fixed.
 6. Give the Tool a specific description that says what data it returns and when to call it.
 
-The Tool variant supports Connection, Catalog, and structured Row operations. **SQL (Advanced)**
-is rejected at runtime for every AI Tool call, even if the same credential permits advanced SQL
-in a normal workflow. The credential-level Tool limit also overrides a larger limit selected in
-the node. This prevents a workflow editor or imported template from silently widening the agent's
-database surface.
+The Tool variant supports Connection and structured Row operations. Catalog operations require
+the additional **Allow AI Catalog Discovery** switch. **SQL (Advanced)** is rejected at runtime
+for every AI Tool call, even if the same credential permits advanced SQL in a normal workflow.
+Credential-level row and byte limits prevent a workflow editor, imported template, or unexpectedly
+wide value from silently expanding the agent's database or context surface.
 
 ## Example workflows
 

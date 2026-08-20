@@ -14,28 +14,43 @@ import {
 } from 'n8n-workflow';
 
 import { withHanaClient, type HanaSession } from './hanaClient';
+import {
+	allowedObjectNamesForSchema,
+	allowedColumnsForObject,
+	assertColumnsAllowed,
+	assertObjectAllowed,
+	hasStructuredGovernance,
+	isObjectAllowed,
+	parseAllowedObjects,
+	parseColumnPolicies,
+	parseRequiredFilterPolicies,
+	requiredFiltersForObject,
+	validateGovernanceConfiguration,
+} from './governance';
 import { rowsToJson } from './json';
+import { readCursorValue } from './pagination';
 import {
 	assertIdentifier,
 	assertSchemaAllowed,
 	buildOrderByClause,
 	buildWhereClause,
+	combineWhereClauses,
+	normalizeUiFilters,
 	parseAllowedSchemas,
 	parseIdentifierList,
 	parseParametersJson,
+	parseTypedValue,
 	quoteIdentifier,
 	validateAdvancedSelect,
 } from './sqlSafety';
-import type { Filter, HanaCredentials, OrderBy } from './types';
-import { resolveAiToolPolicy } from './toolPolicy';
+import type { FilterLogic, FilterValueType, HanaCredentials, OrderBy, UiFilter } from './types';
+import { enforceAiToolByteLimit, resolveAiToolPolicy } from './toolPolicy';
 
 const MAX_ROW_LIMIT = 1000;
 
 function rowLimit(value: number, policyMaximum = MAX_ROW_LIMIT): number {
 	if (!Number.isInteger(value) || value < 1 || value > MAX_ROW_LIMIT) {
-		throw new OperationalError(
-			`Row limit must be an integer between 1 and ${MAX_ROW_LIMIT}.`,
-		);
+		throw new OperationalError(`Row limit must be an integer between 1 and ${MAX_ROW_LIMIT}.`);
 	}
 	return Math.min(value, policyMaximum);
 }
@@ -51,6 +66,7 @@ function addResultMetadata(
 	operation: string,
 	limit: number,
 	includeMetadata: boolean,
+	extra: Record<string, unknown> = {},
 ): Record<string, unknown>[] {
 	const truncated = rows.length > limit;
 	const limitedRows = rows.slice(0, limit);
@@ -61,6 +77,7 @@ function addResultMetadata(
 		rowCount: limitedRows.length,
 		rowLimit: limit,
 		truncated,
+		...extra,
 	};
 	if (limitedRows.length === 0) return [{ _hana: metadata }];
 	return limitedRows.map((row, index) => (index === 0 ? { ...row, _hana: metadata } : row));
@@ -75,14 +92,23 @@ async function executeCatalogOperation(
 	aiToolMaxRows?: number,
 ): Promise<Record<string, unknown>[]> {
 	const allowlist = parseAllowedSchemas(credentials.allowedSchemas);
+	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
+	const columnPolicies = parseColumnPolicies(credentials.columnPoliciesJson);
 
 	if (operation === 'listSchemas') {
 		const rows = await session.query(
 			`SELECT "SCHEMA_NAME" FROM "SYS"."SCHEMAS" WHERE "SCHEMA_NAME" <> 'SYS' AND "SCHEMA_NAME" NOT LIKE '\\_SYS\\_%' ESCAPE '\\' ORDER BY "SCHEMA_NAME"`,
 		);
-		const visibleRows = allowlist.length === 0
-			? rows
-			: rows.filter((row) => allowlist.includes(String(row.SCHEMA_NAME).toUpperCase()));
+		let visibleRows =
+			allowlist.length === 0
+				? rows
+				: rows.filter((row) => allowlist.includes(String(row.SCHEMA_NAME).toUpperCase()));
+		if (allowedObjects.size > 0) {
+			visibleRows = visibleRows.filter((row) => {
+				const prefix = `${String(row.SCHEMA_NAME).toUpperCase()}.`;
+				return [...allowedObjects].some((reference) => reference.startsWith(prefix));
+			});
+		}
 		return aiToolMaxRows === undefined
 			? visibleRows
 			: addResultMetadata(visibleRows, operation, aiToolMaxRows, true);
@@ -99,17 +125,44 @@ async function executeCatalogOperation(
 			aiToolMaxRows,
 		);
 		const escapedPrefix = prefix.replace(/[\\%_]/g, '\\$&');
+		const governedNames = allowedObjectNamesForSchema(schema, allowedObjects);
+		if (governedNames?.length === 0) {
+			return addResultMetadata([], operation, limit, true, {
+				objectAllowlistApplied: true,
+			});
+		}
+		const objectPredicate = governedNames
+			? ` AND "TABLE_NAME" IN (${governedNames.map(() => '?').join(', ')})`
+			: '';
+		const viewPredicate = governedNames
+			? ` AND "VIEW_NAME" IN (${governedNames.map(() => '?').join(', ')})`
+			: '';
+		const queryParameters = governedNames
+			? [
+					schema,
+					`${escapedPrefix}%`,
+					...governedNames,
+					schema,
+					`${escapedPrefix}%`,
+					...governedNames,
+				]
+			: [schema, `${escapedPrefix}%`, schema, `${escapedPrefix}%`];
 		const rows = await session.query(
 			`SELECT "SCHEMA_NAME", "TABLE_NAME" AS "OBJECT_NAME", 'TABLE' AS "OBJECT_TYPE"
-FROM "SYS"."TABLES" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" LIKE ? ESCAPE '\\'
+FROM "SYS"."TABLES" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" LIKE ? ESCAPE '\\'${objectPredicate}
 UNION ALL
 SELECT "SCHEMA_NAME", "VIEW_NAME" AS "OBJECT_NAME", 'VIEW' AS "OBJECT_TYPE"
-FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" LIKE ? ESCAPE '\\'
+FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" LIKE ? ESCAPE '\\'${viewPredicate}
 ORDER BY "OBJECT_TYPE", "OBJECT_NAME"
 LIMIT ${limit + 1}`,
-			[schema, `${escapedPrefix}%`, schema, `${escapedPrefix}%`],
+			queryParameters,
 		);
-		return addResultMetadata(rows, operation, limit, true);
+		const governedRows = rows.filter((row) =>
+			isObjectAllowed(schema, String(row.OBJECT_NAME), allowedObjects),
+		);
+		return addResultMetadata(governedRows, operation, limit, true, {
+			objectAllowlistApplied: allowedObjects.size > 0,
+		});
 	}
 
 	const objectType = context.getNodeParameter('objectType', itemIndex) as 'table' | 'view';
@@ -117,15 +170,38 @@ LIMIT ${limit + 1}`,
 		context.getNodeParameter('objectName', itemIndex) as string,
 		'object name',
 	);
+	assertObjectAllowed(schema, objectName, allowedObjects);
 	const catalogView = objectType === 'view' ? 'VIEW_COLUMNS' : 'TABLE_COLUMNS';
 	const objectColumn = objectType === 'view' ? 'VIEW_NAME' : 'TABLE_NAME';
-	const rows = await session.query(
-		`SELECT "COLUMN_NAME", "POSITION", "DATA_TYPE_NAME", "LENGTH", "SCALE", "IS_NULLABLE"
+	let rows: Record<string, unknown>[];
+	try {
+		rows = await session.query(
+			`SELECT "COLUMN_NAME", "POSITION", "DATA_TYPE_NAME", "LENGTH", "SCALE", "IS_NULLABLE", "DEFAULT_VALUE", "COMMENTS"
 FROM "SYS"."${catalogView}"
 WHERE "SCHEMA_NAME" = ? AND "${objectColumn}" = ?
 ORDER BY "POSITION"`,
-		[schema, objectName],
-	);
+			[schema, objectName],
+		);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (!/invalid column name/i.test(message)) {
+			// Converted to NodeOperationError by the execute boundary, which has node context.
+			// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
+			throw new OperationalError(message);
+		}
+		rows = await session.query(
+			`SELECT "COLUMN_NAME", "POSITION", "DATA_TYPE_NAME", "LENGTH", "SCALE", "IS_NULLABLE"
+FROM "SYS"."${catalogView}"
+WHERE "SCHEMA_NAME" = ? AND "${objectColumn}" = ?
+ORDER BY "POSITION"`,
+			[schema, objectName],
+		);
+	}
+	const allowedColumns = allowedColumnsForObject(schema, objectName, columnPolicies);
+	if (allowedColumns) {
+		const allowed = new Set(allowedColumns.map((column) => column.toUpperCase()));
+		rows = rows.filter((row) => allowed.has(String(row.COLUMN_NAME).toUpperCase()));
+	}
 	return aiToolMaxRows === undefined
 		? rows
 		: addResultMetadata(rows, operation, aiToolMaxRows, true);
@@ -140,6 +216,9 @@ async function executeRowsOperation(
 	aiToolMaxRows?: number,
 ): Promise<Record<string, unknown>[]> {
 	const allowlist = parseAllowedSchemas(credentials.allowedSchemas);
+	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
+	const columnPolicies = parseColumnPolicies(credentials.columnPoliciesJson);
+	const requiredFilterPolicies = parseRequiredFilterPolicies(credentials.requiredFiltersJson);
 	const schema = assertSchemaAllowed(
 		context.getNodeParameter('schema', itemIndex) as string,
 		allowlist,
@@ -148,46 +227,109 @@ async function executeRowsOperation(
 		context.getNodeParameter('objectName', itemIndex) as string,
 		'object name',
 	);
-	const filters = valuesFromCollection<Filter>(
-		context.getNodeParameter('filters', itemIndex, {}),
+	assertObjectAllowed(schema, objectName, allowedObjects);
+	const allowedColumns = allowedColumnsForObject(schema, objectName, columnPolicies);
+	const filters = normalizeUiFilters(
+		valuesFromCollection<UiFilter>(context.getNodeParameter('filters', itemIndex, {})),
 	);
-	const where = buildWhereClause(filters);
-	const limit = rowLimit(
-		context.getNodeParameter('limit', itemIndex) as number,
-		aiToolMaxRows,
+	const filterLogic = context.getNodeParameter('filterLogic', itemIndex, 'AND') as FilterLogic;
+	const requiredFilters = requiredFiltersForObject(schema, objectName, requiredFilterPolicies);
+	assertColumnsAllowed(
+		[...filters, ...requiredFilters].map((filter) => filter.column),
+		allowedColumns,
 	);
+	const userWhere = buildWhereClause(filters, filterLogic);
+	const requiredWhere = buildWhereClause(requiredFilters, 'AND');
+	const limit = rowLimit(context.getNodeParameter('limit', itemIndex) as number, aiToolMaxRows);
 	const tableReference = `${quoteIdentifier(schema)}.${quoteIdentifier(objectName)}`;
+	const policyMetadata = {
+		source: `${schema}.${objectName}`,
+		objectAllowlistApplied: allowedObjects.size > 0,
+		columnPolicyApplied: allowedColumns !== undefined,
+		requiredFilterCount: requiredFilters.length,
+	};
 
 	if (operation === 'select') {
 		const rawColumns = context.getNodeParameter('columns', itemIndex) as string;
-		const columns =
-			rawColumns.trim() === '*'
-				? '*'
-				: parseIdentifierList(rawColumns, 'column')
-						.map((column) => quoteIdentifier(column))
-						.join(', ');
-		const orderBy = valuesFromCollection<OrderBy>(
-			context.getNodeParameter('orderBy', itemIndex, {}),
+		const selectedColumns =
+			rawColumns.trim() === '*' ? allowedColumns : parseIdentifierList(rawColumns, 'column');
+		if (selectedColumns) assertColumnsAllowed(selectedColumns, allowedColumns);
+		const columns = selectedColumns
+			? selectedColumns.map((column) => quoteIdentifier(column)).join(', ')
+			: '*';
+		let orderBy = valuesFromCollection<OrderBy>(context.getNodeParameter('orderBy', itemIndex, {}));
+		assertColumnsAllowed(
+			orderBy.map((sort) => sort.column),
+			allowedColumns,
 		);
+
+		const paginationMode = context.getNodeParameter('paginationMode', itemIndex, 'none') as string;
+		let cursorColumn: string | undefined;
+		let cursorDirection: 'ASC' | 'DESC' = 'ASC';
+		let cursorWhere = { sql: '', parameters: [] as unknown[] };
+		if (paginationMode !== 'none') {
+			cursorColumn = assertIdentifier(
+				context.getNodeParameter('cursorColumn', itemIndex) as string,
+				'cursor column',
+			);
+			assertColumnsAllowed([cursorColumn], allowedColumns);
+			if (
+				selectedColumns &&
+				!selectedColumns.some((column) => column.toUpperCase() === cursorColumn?.toUpperCase())
+			) {
+				throw new OperationalError('The cursor column must be included in the selected columns.');
+			}
+			cursorDirection = context.getNodeParameter('cursorDirection', itemIndex, 'ASC') as
+				| 'ASC'
+				| 'DESC';
+			if (paginationMode === 'keysetContinue') {
+				const cursorValueType = context.getNodeParameter(
+					'cursorValueType',
+					itemIndex,
+					'string',
+				) as FilterValueType;
+				cursorWhere = buildWhereClause([
+					{
+						column: cursorColumn,
+						operator: cursorDirection === 'DESC' ? 'lt' : 'gt',
+						value: parseTypedValue(
+							context.getNodeParameter('cursorValue', itemIndex),
+							cursorValueType,
+						),
+					},
+				]);
+			}
+			orderBy = [
+				{ column: cursorColumn, direction: cursorDirection },
+				...orderBy.filter((sort) => sort.column.toUpperCase() !== cursorColumn?.toUpperCase()),
+			];
+		}
+
+		const where = combineWhereClauses(requiredWhere, userWhere, cursorWhere);
 		const sql = `SELECT ${columns} FROM ${tableReference}${where.sql}${buildOrderByClause(orderBy)} LIMIT ${limit + 1}`;
+		const queryStartedAt = Date.now();
 		const rows = await session.query(sql, where.parameters);
-		const includeMetadata = context.getNodeParameter(
-			'includeMetadata',
-			itemIndex,
-			true,
-		) as boolean;
-		return addResultMetadata(rows, operation, limit, includeMetadata);
+		const durationMs = Date.now() - queryStartedAt;
+		const includeMetadata =
+			paginationMode !== 'none' ||
+			(context.getNodeParameter('includeMetadata', itemIndex, true) as boolean);
+		const limitedRows = rows.slice(0, limit);
+		const lastLimitedRow = limitedRows[limitedRows.length - 1];
+		const nextCursor =
+			cursorColumn && lastLimitedRow && rows.length > limit
+				? readCursorValue(lastLimitedRow, cursorColumn)
+				: undefined;
+		return addResultMetadata(rows, operation, limit, includeMetadata, {
+			...policyMetadata,
+			durationMs,
+			paginationMode,
+			hasMore: rows.length > limit,
+			...(nextCursor === undefined ? {} : { nextCursor, cursorColumn, cursorDirection }),
+		});
 	}
 
-	const aggregateFunction = context.getNodeParameter(
-		'aggregateFunction',
-		itemIndex,
-	) as string;
-	const aggregateColumn = context.getNodeParameter(
-		'aggregateColumn',
-		itemIndex,
-		'',
-	) as string;
+	const aggregateFunction = context.getNodeParameter('aggregateFunction', itemIndex) as string;
+	const aggregateColumn = context.getNodeParameter('aggregateColumn', itemIndex, '') as string;
 	const aggregateAlias = quoteIdentifier(
 		context.getNodeParameter('aggregateAlias', itemIndex) as string,
 		'aggregate alias',
@@ -195,24 +337,28 @@ async function executeRowsOperation(
 	const aggregateExpression =
 		aggregateFunction === 'COUNT'
 			? 'COUNT(*)'
-			: `${aggregateFunction}(${quoteIdentifier(aggregateColumn, 'aggregate column')})`;
+			: aggregateFunction === 'COUNT_DISTINCT'
+				? `COUNT(DISTINCT ${quoteIdentifier(aggregateColumn, 'aggregate column')})`
+				: `${aggregateFunction}(${quoteIdentifier(aggregateColumn, 'aggregate column')})`;
 	const groupByRaw = context.getNodeParameter('groupBy', itemIndex, '') as string;
-	const groupByColumns = groupByRaw.trim()
-		? parseIdentifierList(groupByRaw, 'group column')
-		: [];
+	const groupByColumns = groupByRaw.trim() ? parseIdentifierList(groupByRaw, 'group column') : [];
+	const aggregateColumns = aggregateFunction === 'COUNT' ? [] : [aggregateColumn];
+	assertColumnsAllowed([...aggregateColumns, ...groupByColumns], allowedColumns);
+	const where = combineWhereClauses(requiredWhere, userWhere);
 	const groupSelect = groupByColumns.map((column) => quoteIdentifier(column)).join(', ');
 	const groupClause = groupSelect ? ` GROUP BY ${groupSelect}` : '';
 	const selectClause = groupSelect
 		? `${groupSelect}, ${aggregateExpression} AS ${aggregateAlias}`
 		: `${aggregateExpression} AS ${aggregateAlias}`;
 	const sql = `SELECT ${selectClause} FROM ${tableReference}${where.sql}${groupClause} LIMIT ${limit + 1}`;
+	const queryStartedAt = Date.now();
 	const rows = await session.query(sql, where.parameters);
-	const includeMetadata = context.getNodeParameter(
-		'includeMetadata',
-		itemIndex,
-		true,
-	) as boolean;
-	return addResultMetadata(rows, operation, limit, includeMetadata);
+	const durationMs = Date.now() - queryStartedAt;
+	const includeMetadata = context.getNodeParameter('includeMetadata', itemIndex, true) as boolean;
+	return addResultMetadata(rows, operation, limit, includeMetadata, {
+		...policyMetadata,
+		durationMs,
+	});
 }
 
 async function executeAdvancedSql(
@@ -226,6 +372,11 @@ async function executeAdvancedSql(
 			'Advanced SQL is disabled in the selected credential. Enable it only for trusted workflows.',
 		);
 	}
+	if (context.getNode().typeVersion >= 1.1 && hasStructuredGovernance(credentials)) {
+		throw new OperationalError(
+			'Advanced SQL cannot be combined with schema, object, column, or required-filter policies. Use structured Row operations, or a separate least-privilege credential with database grants as its only boundary.',
+		);
+	}
 	const limit = rowLimit(context.getNodeParameter('limit', itemIndex) as number);
 	const parameters = parseParametersJson(
 		context.getNodeParameter('parametersJson', itemIndex, '[]') as string,
@@ -236,11 +387,7 @@ async function executeAdvancedSql(
 		limit,
 	);
 	const rows = await session.query(sql, parameters);
-	const includeMetadata = context.getNodeParameter(
-		'includeMetadata',
-		itemIndex,
-		true,
-	) as boolean;
+	const includeMetadata = context.getNodeParameter('includeMetadata', itemIndex, true) as boolean;
 	return addResultMetadata(rows, 'executeSelect', limit, includeMetadata);
 }
 
@@ -253,7 +400,7 @@ export class HanaSecure implements INodeType {
 			dark: 'file:logaliHanaGuard-v023.dark.svg',
 		},
 		group: ['input'],
-		version: 1,
+		version: [1, 1.1],
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
 		description: 'Read SAP HANA data with explicit security guardrails by Logali Group',
 		usableAsTool: {
@@ -265,9 +412,7 @@ export class HanaSecure implements INodeType {
 		defaults: { name: 'Logali HANA Guard' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
-		credentials: [
-			{ name: 'hanaSecureApi', required: true, testedBy: 'hanaConnectionTest' },
-		],
+		credentials: [{ name: 'hanaSecureApi', required: true, testedBy: 'hanaConnectionTest' }],
 		properties: [
 			{
 				displayName: 'Resource',
@@ -457,6 +602,19 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['rows'], operation: ['select'] } },
 			},
 			{
+				displayName: 'Filter Logic',
+				name: 'filterLogic',
+				type: 'options',
+				options: [
+					{ name: 'All Filters Must Match (AND)', value: 'AND' },
+					{ name: 'Any Filter May Match (OR)', value: 'OR' },
+				],
+				default: 'AND',
+				description:
+					'How user-defined filters are combined. Credential-required filters are always enforced with AND.',
+				displayOptions: { show: { resource: ['rows'] } },
+			},
+			{
 				displayName: 'Filters',
 				name: 'filters',
 				type: 'fixedCollection',
@@ -481,15 +639,22 @@ export class HanaSecure implements INodeType {
 								name: 'operator',
 								type: 'options',
 								options: [
+									{ name: 'Between', value: 'between' },
+									{ name: 'Contains Literal Text', value: 'contains' },
+									{ name: 'Ends With Literal Text', value: 'endsWith' },
 									{ name: 'Equals', value: 'eq' },
 									{ name: 'Greater Than', value: 'gt' },
 									{ name: 'Greater Than or Equal', value: 'ge' },
+									{ name: 'In List', value: 'in' },
 									{ name: 'Is Not Null', value: 'isNotNull' },
 									{ name: 'Is Null', value: 'isNull' },
 									{ name: 'Less Than', value: 'lt' },
 									{ name: 'Less Than or Equal', value: 'le' },
 									{ name: 'Like', value: 'like' },
 									{ name: 'Not Equals', value: 'ne' },
+									{ name: 'Not In List', value: 'notIn' },
+									{ name: 'Not Like', value: 'notLike' },
+									{ name: 'Starts With Literal Text', value: 'startsWith' },
 								],
 								default: 'eq',
 							},
@@ -499,13 +664,125 @@ export class HanaSecure implements INodeType {
 								type: 'string',
 								default: '',
 								displayOptions: {
-									hide: { operator: ['isNull', 'isNotNull'] },
+									hide: {
+										operator: ['isNull', 'isNotNull', 'in', 'notIn', 'between'],
+									},
 								},
 								description: 'Value passed to HANA as a prepared-statement parameter',
+							},
+							{
+								displayName: 'Value Type',
+								name: 'valueType',
+								type: 'options',
+								options: [
+									{ name: 'Boolean', value: 'boolean' },
+									{ name: 'Number', value: 'number' },
+									{ name: 'Null', value: 'null' },
+									{ name: 'String / Date / Timestamp', value: 'string' },
+								],
+								default: 'string',
+								displayOptions: {
+									hide: { operator: ['isNull', 'isNotNull'] },
+								},
+								description:
+									'How the value is bound to the prepared statement; dates and timestamps use HANA-compatible strings',
+							},
+							{
+								displayName: 'Values JSON',
+								name: 'valuesJson',
+								type: 'string',
+								default: '[]',
+								placeholder: '["1010", "1020"]',
+								displayOptions: {
+									show: { operator: ['in', 'notIn', 'between'] },
+								},
+								description:
+									'JSON array of bound values. BETWEEN needs exactly two; IN and NOT IN allow at most 100.',
 							},
 						],
 					},
 				],
+			},
+			{
+				displayName: 'Pagination Mode',
+				name: 'paginationMode',
+				type: 'options',
+				options: [
+					{ name: 'Continue After Cursor (Keyset)', value: 'keysetContinue' },
+					{ name: 'First Keyset Page', value: 'keysetFirst' },
+					{ name: 'No Pagination', value: 'none' },
+				],
+				default: 'none',
+				description:
+					'Start with First Keyset Page, then reuse nextCursor with Continue After Cursor. The cursor column must be unique and monotonic.',
+				displayOptions: { show: { resource: ['rows'], operation: ['select'] } },
+			},
+			{
+				displayName: 'Cursor Column',
+				name: 'cursorColumn',
+				type: 'string',
+				default: '',
+				required: true,
+				placeholder: 'CHANGED_AT',
+				description:
+					'Unique, sortable column used to continue after the previous page; include it in Columns',
+				displayOptions: {
+					show: {
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['keysetFirst', 'keysetContinue'],
+					},
+				},
+			},
+			{
+				displayName: 'Cursor Direction',
+				name: 'cursorDirection',
+				type: 'options',
+				options: [
+					{ name: 'Ascending (Values Greater Than Cursor)', value: 'ASC' },
+					{ name: 'Descending (Values Less Than Cursor)', value: 'DESC' },
+				],
+				default: 'ASC',
+				displayOptions: {
+					show: {
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['keysetFirst', 'keysetContinue'],
+					},
+				},
+			},
+			{
+				displayName: 'Cursor Value Type',
+				name: 'cursorValueType',
+				type: 'options',
+				options: [
+					{ name: 'Boolean', value: 'boolean' },
+					{ name: 'Number', value: 'number' },
+					{ name: 'String / Date / Timestamp', value: 'string' },
+				],
+				default: 'string',
+				displayOptions: {
+					show: {
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['keysetContinue'],
+					},
+				},
+			},
+			{
+				displayName: 'Cursor Value',
+				name: 'cursorValue',
+				type: 'string',
+				default: '',
+				required: true,
+				description: 'The nextCursor value returned by the previous execution',
+				displayOptions: {
+					show: {
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['keysetContinue'],
+					},
+				},
 			},
 			{
 				displayName: 'Order By',
@@ -548,6 +825,7 @@ export class HanaSecure implements INodeType {
 				options: [
 					{ name: 'Average', value: 'AVG' },
 					{ name: 'Count', value: 'COUNT' },
+					{ name: 'Count Distinct', value: 'COUNT_DISTINCT' },
 					{ name: 'Maximum', value: 'MAX' },
 					{ name: 'Minimum', value: 'MIN' },
 					{ name: 'Sum', value: 'SUM' },
@@ -566,7 +844,7 @@ export class HanaSecure implements INodeType {
 					show: {
 						resource: ['rows'],
 						operation: ['aggregate'],
-						aggregateFunction: ['AVG', 'MAX', 'MIN', 'SUM'],
+						aggregateFunction: ['AVG', 'COUNT_DISTINCT', 'MAX', 'MIN', 'SUM'],
 					},
 				},
 			},
@@ -594,8 +872,7 @@ export class HanaSecure implements INodeType {
 				typeOptions: { rows: 8 },
 				default: 'SELECT * FROM "SCHEMA"."VIEW" WHERE "COMPANY_CODE" = ?',
 				required: true,
-				description:
-					'One SELECT statement. Expressions are intentionally disabled for this field.',
+				description: 'One SELECT statement. Expressions are intentionally disabled for this field.',
 				noDataExpression: true,
 				displayOptions: { show: { resource: ['sql'] } },
 			},
@@ -623,6 +900,7 @@ export class HanaSecure implements INodeType {
 				type: 'boolean',
 				default: true,
 				description: 'Whether to add row count, limit, and truncation information',
+				hint: 'Keyset pagination always includes metadata so the next cursor is available.',
 				displayOptions: { show: { resource: ['rows', 'sql'] } },
 			},
 		],
@@ -636,6 +914,16 @@ export class HanaSecure implements INodeType {
 			): Promise<INodeCredentialTestResult> {
 				try {
 					const credentials = credential.data as unknown as HanaCredentials;
+					validateGovernanceConfiguration(credentials);
+					if (credentials.allowAiTool === true) {
+						resolveAiToolPolicy(
+							'n8n-nodes-hana-secure.hanaSecureTool',
+							1.1,
+							'rows',
+							'select',
+							credentials,
+						);
+					}
 					await withHanaClient(credentials, async (session) => {
 						await session.query('SELECT 1 AS "OK" FROM DUMMY');
 					});
@@ -662,9 +950,12 @@ export class HanaSecure implements INodeType {
 					'hanaSecureApi',
 					itemIndex,
 				)) as unknown as HanaCredentials;
+				validateGovernanceConfiguration(credentials);
 				const aiToolPolicy = resolveAiToolPolicy(
 					this.getNode().type,
+					this.getNode().typeVersion,
 					resource,
+					operation,
 					credentials,
 				);
 
@@ -702,8 +993,10 @@ export class HanaSecure implements INodeType {
 					return await executeAdvancedSql(this, session, itemIndex, credentials);
 				});
 
+				const jsonResult = rowsToJson(result);
+				enforceAiToolByteLimit(jsonResult, aiToolPolicy.maxBytes);
 				outputItems.push(
-					...rowsToJson(result).map((json) => ({
+					...jsonResult.map((json) => ({
 						json: json as IDataObject,
 						pairedItem: { item: itemIndex },
 					})),

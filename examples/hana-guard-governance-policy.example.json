@@ -1,0 +1,11 @@
+{
+  "allowedSchemas": "TRAINING,REPORTING",
+  "allowedObjects": "TRAINING.GL_ITEMS,TRAINING.OPEN_ORDERS,REPORTING.COMPANY_OVERVIEW",
+  "columnPoliciesJson": "{\"TRAINING.GL_ITEMS\":[\"MANDT\",\"COMPANY_CODE\",\"FISCAL_YEAR\",\"AMOUNT\",\"CURRENCY\"],\"TRAINING.OPEN_ORDERS\":[\"MANDT\",\"ORDER_ID\",\"COMPANY_CODE\",\"CHANGED_AT\",\"NET_VALUE\",\"CURRENCY\"]}",
+  "requiredFiltersJson": "{\"TRAINING.GL_ITEMS\":[{\"column\":\"MANDT\",\"operator\":\"eq\",\"value\":\"250\"}],\"TRAINING.OPEN_ORDERS\":[{\"column\":\"MANDT\",\"operator\":\"eq\",\"value\":\"250\"}]}",
+  "allowAdvancedSql": false,
+  "allowAiTool": true,
+  "allowAiCatalogDiscovery": false,
+  "aiToolMaxRows": 100,
+  "aiToolMaxBytes": 262144
+}

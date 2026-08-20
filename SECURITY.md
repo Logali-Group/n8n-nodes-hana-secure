@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest published minor version receives security fixes. Version `0.3.0` is a release
+Only the latest published minor version receives security fixes. Version `0.4.0` is a release
 candidate and must be tested in a non-production, self-hosted n8n instance until publication.
 
 ## Reporting a vulnerability
@@ -25,7 +25,9 @@ Logali HANA Guard is designed for read-only automation. Its application controls
 
 - prepared statements for filter and advanced-SQL values;
 - strict identifier validation;
-- optional schema allowlisting;
+- optional schema and exact object allowlisting;
+- object-scoped column policies across projections, predicates, sorting, grouping, and cursors;
+- credential-required row filters that callers cannot remove;
 - TLS and certificate validation defaults;
 - connection and query timeouts;
 - enforced row and catalog output limits;
@@ -33,7 +35,8 @@ Logali HANA Guard is designed for read-only automation. Its application controls
 - credential redaction in driver error messages;
 - advanced SQL disabled at credential level by default;
 - separate credential opt-in for AI Tool use;
-- credential-level result cap for every AI Tool call;
+- separate AI Tool opt-in for catalog discovery;
+- credential-level row and serialized-byte caps for every AI Tool call;
 - advanced SQL blocked unconditionally in the AI Tool variant.
 
 The controls do not turn an over-privileged database account into a safe account. The HANA user
@@ -62,14 +65,16 @@ This reduces accidental or obvious misuse; it is not a complete SQL firewall and
 all semantic behavior of a query.
 
 For untrusted workflow authors, leave advanced SQL disabled and use only the structured
-operations.
+operations. In node v1.1+, advanced SQL also refuses any credential containing schema, object,
+column, or required-filter policies. This is intentional: a conservative keyword guard cannot
+prove that arbitrary nested SQL preserves every structured governance rule.
 
 ## MCP and AI tools
 
-Version `0.3.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
+Version `0.4.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
 generated variant refuses to run unless **Allow AI Tool Use** is enabled in the credential. It
-supports only Connection, Catalog, and structured Row operations, applies the credential-level
-Tool row cap, and rejects SQL (Advanced) unconditionally.
+supports Connection and structured Row operations, applies credential-level row and byte caps,
+and rejects SQL (Advanced) unconditionally. Catalog discovery requires a second explicit switch.
 
 Configure the Tool with fixed approved schemas, objects, columns, and limits. If a model must
 supply a value, expose only a narrowly described filter value—not a schema, table, column list, or

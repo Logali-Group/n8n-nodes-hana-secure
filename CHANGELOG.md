@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-08-20
+
+### Added
+
+- Add exact `SCHEMA.OBJECT` allowlists for catalog and structured row operations.
+- Add object-scoped column policies that govern selection, filters, sorting, grouping,
+  aggregation, and pagination cursors.
+- Add credential-required filters that are always combined with user filters using `AND`.
+- Add typed filter values, `AND`/`OR` user-filter logic, `IN`, `NOT IN`, `BETWEEN`, `NOT LIKE`,
+  and literal contains/starts-with/ends-with operators.
+- Add single-column keyset pagination with `hasMore` and `nextCursor` result metadata.
+- Add `COUNT(DISTINCT ...)`, query duration, policy status, and source details to result metadata.
+- Add HANA column comments and default values to Describe when the server exposes them, with a
+  compatibility fallback for older catalog schemas.
+- Add a separate AI catalog-discovery switch and a serialized-result byte cap.
+- Validate policy syntax, cross-policy consistency, and AI limits during credential testing and
+  before every execution.
+
+### Security
+
+- Apply object, column, and required-filter policies to normal structured reads and AI Tool calls.
+- Fail closed when a governance policy is malformed or an identifier falls outside its policy.
+- Block advanced SQL in node v1.1+ when structured credential policies are present, because an
+  arbitrary SELECT cannot honestly guarantee object, column, and row-policy enforcement.
+- Keep existing node v1 workflows compatible while new nodes use the stricter v1.1 AI catalog
+  and result-size controls.
+
 ## [0.3.1] - 2026-08-19
 
 ### Changed

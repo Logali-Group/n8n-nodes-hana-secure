@@ -6,6 +6,8 @@ import {
 	assertSchemaAllowed,
 	buildOrderByClause,
 	buildWhereClause,
+	combineWhereClauses,
+	normalizeUiFilters,
 	parseAllowedSchemas,
 	parseIdentifierList,
 	parseParametersJson,
@@ -68,6 +70,54 @@ describe('structured query builders', () => {
 			' ORDER BY "FISCAL_YEAR" DESC, "DOCUMENT" ASC',
 		);
 	});
+
+	it('supports OR groups, list/range operators, and literal text matching', () => {
+		const user = buildWhereClause(
+			[
+				{ column: 'STATUS', operator: 'in', value: ['OPEN', 'PENDING'] },
+				{ column: 'AMOUNT', operator: 'between', value: [100, 500] },
+				{ column: 'TEXT', operator: 'contains', value: '50%_done' },
+			],
+			'OR',
+		);
+		assert.equal(
+			user.sql,
+			' WHERE "STATUS" IN (?, ?) OR "AMOUNT" BETWEEN ? AND ? OR "TEXT" LIKE ? ESCAPE \'\\\'',
+		);
+		assert.deepEqual(user.parameters, ['OPEN', 'PENDING', 100, 500, '%50\\%\\_done%']);
+
+		const required = buildWhereClause([{ column: 'MANDT', operator: 'eq', value: '250' }]);
+		assert.equal(
+			combineWhereClauses(required, user).sql,
+			' WHERE ("MANDT" = ?) AND ("STATUS" IN (?, ?) OR "AMOUNT" BETWEEN ? AND ? OR "TEXT" LIKE ? ESCAPE \'\\\')',
+		);
+	});
+
+	it('normalizes typed UI values before parameter binding', () => {
+		assert.deepEqual(
+			normalizeUiFilters([
+				{ column: 'AMOUNT', operator: 'ge', value: '10.5', valueType: 'number' },
+				{
+					column: 'YEAR',
+					operator: 'in',
+					valuesJson: '[2025, 2026]',
+					valueType: 'number',
+				},
+			]),
+			[
+				{ column: 'AMOUNT', operator: 'ge', value: 10.5 },
+				{ column: 'YEAR', operator: 'in', value: [2025, 2026] },
+			],
+		);
+		assert.throws(
+			() => buildWhereClause([{ column: 'YEAR', operator: 'between', value: [2026] }]),
+			/exactly two/,
+		);
+		assert.deepEqual(
+			normalizeUiFilters([{ column: 'DELETED_AT', operator: 'eq', value: '', valueType: 'null' }]),
+			[{ column: 'DELETED_AT', operator: 'isNull' }],
+		);
+	});
 });
 
 describe('advanced SQL guard', () => {
@@ -112,12 +162,7 @@ describe('advanced SQL guard', () => {
 			() => validateAdvancedSelect('SELECT * FROM "T" WHERE "A" = ?', [], 10),
 			/placeholder/,
 		);
-		assert.deepEqual(parseParametersJson('["1010", 2026, true, null]'), [
-			'1010',
-			2026,
-			true,
-			null,
-		]);
+		assert.deepEqual(parseParametersJson('["1010", 2026, true, null]'), ['1010', 2026, true, null]);
 		assert.throws(() => parseParametersJson('[{"unsafe":true}]'), /only strings/);
 	});
 });
