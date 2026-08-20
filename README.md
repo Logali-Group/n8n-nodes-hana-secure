@@ -6,7 +6,7 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.5.0` demonstration release. The package is public on npm with provenance and installs
+> Status: `0.6.0` demonstration release. The package is public on npm with provenance and installs
 > by name on self-hosted n8n. The connection and read contract has been verified against SAP HANA
 > `2.00.088`; every new version should still pass a non-production HANA end-to-end test before it
 > is promoted to production.
@@ -28,9 +28,20 @@ This package:
 - supports typed filters, literal text matching, lists, ranges, and `AND`/`OR` logic;
 - loads governed schema, object, and column choices in the n8n editor;
 - reads exactly one row by a typed simple or composite key;
-- supports bounded keyset pagination for incremental reads;
+- supports stable composite-key keyset pagination, opaque continuation tokens, and bounded
+  automatic page collection;
+- recognizes SQL runtime views, calculation views, and virtual tables that may expose remote CDS
+  runtime objects;
+- discovers positional view parameters and named calculation-view placeholders, then binds their
+  values through prepared statements;
+- provides `Exists`, `Count`, `Distinct`, five-row `Preview`, and multiple aggregates per query;
+- discovers primary and unique keys, reports database information, and exposes a sanitized active
+  governance policy summary;
 - returns each row as an item, all rows in one item, or enriches the incoming item;
-- enforces query timeouts and hard result limits, including catalog discovery;
+- converts BIGINT, dates/timestamps, and binary values with explicit lossless output modes;
+- reuses one HANA connection per node execution and returns safe query diagnostics;
+- classifies and redacts database errors, including whether retry may be appropriate;
+- enforces query timeouts plus hard row, page, and serialized-result limits;
 - escapes catalog-name wildcards and supports a literal object-name prefix;
 - enables TLS and certificate validation by default;
 - keeps manually written SQL disabled by default;
@@ -119,12 +130,12 @@ Copy the tarball to the Docker host and replace `<n8n-container>` with the devel
 name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.5.0.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.6.0.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.5.0.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.6.0.tgz
 exit
 
 docker restart <n8n-container>
@@ -222,14 +233,21 @@ user or database administrator account into n8n.
 ### Connection
 
 - **Test Connection**: returns the active user, schema, database, and TLS state.
+- **Get Database Information**: returns the visible system ID, database name, version, usage, start
+  time, and TLS state.
 
 ### Catalog
 
 - **List Schemas**: lists visible non-system schemas and applies the credential allowlist.
-- **List Tables and Views**: lists objects in one allowed schema, with an optional literal prefix
-  and a result limit of 1–1,000 (100 by default).
+- **List Tables and Views**: lists tables, SQL/calculation views, and virtual tables in one allowed
+  schema, with an optional literal prefix and a result limit of 1–1,000 (100 by default).
 - **Describe Table or View**: returns approved column metadata, including comments and defaults
   when the HANA catalog version exposes them.
+- **Inspect Semantic/CDS Runtime View**: classifies SQL runtime views, calculation views, and HANA
+  virtual tables without claiming access to unavailable ABAP source definitions.
+- **List Semantic View Parameters**: returns ordered SQL/virtual-view parameters or named
+  calculation-view placeholders, including defaults and mandatory flags where HANA exposes them.
+- **List Keys and Constraints**: discovers governed primary-key and unique-key columns.
 
 Schema, object, filter-column, sort-column, cursor-column, aggregate-column, and key-column fields
 load their choices from HANA. The choices apply the same schema, object, and column policies as
@@ -238,19 +256,37 @@ execution, so the editor does not advertise objects the credential is not allowe
 ### Row
 
 - **Select Rows**: choose governed columns, typed filters, sorting, a row limit, and optional
-  keyset pagination without writing SQL. Start with **First Keyset Page** and a unique cursor
-  column; a truncated page returns `hasMore` and `nextCursor`. Pass that value to **Continue After
-  Cursor (Keyset)** for the following page.
+  composite-key pagination without writing SQL. Use **Automatic (Bounded)** to follow pages up to
+  both row and page caps, or pass the opaque `nextCursor` token to **Continue From Cursor Token**.
+  Cursor columns are always placed first in the deterministic sort order.
 - **Get One by Key**: provide one or more typed equality fields for a simple or composite key. The
   operation returns at most one row and fails when an incomplete key matches multiple rows.
-- **Aggregate Rows**: use `COUNT`, `COUNT DISTINCT`, `SUM`, `AVG`, `MIN`, or `MAX`, with optional
-  grouping and filters.
+- **Aggregate Rows**: combine up to ten `COUNT`, `COUNT DISTINCT`, `SUM`, `AVG`, `MIN`, or `MAX`
+  calculations, with optional grouping and filters.
+- **Count Rows**, **Exists**, **Distinct Values**, and **Preview Rows** provide bounded structured
+  alternatives for common checks without handwritten SQL.
+
+For a parameterized runtime object, choose **Runtime View Parameters**:
+
+- **Auto Detect (Recommended)** inspects the governed runtime object and chooses the appropriate
+  positional, calculation-placeholder, or parameterless form;
+- **Positional SQL / Virtual CDS View Parameters** builds `"SCHEMA"."VIEW"(?, ...)`;
+- **Calculation View Placeholders** builds validated
+  `PLACEHOLDER."$$P_NAME$$" => ?` bindings;
+- **No Input Parameters** reads a normal table or view.
+
+The node executes the HANA object that actually exists at SQL runtime. It does not parse or execute
+ABAP CDS DDL source. A CDS view with a generated SQL runtime object can be selected through that
+object; a remotely exposed parameterized object can be selected through a configured HANA virtual
+table. ABAP CDS view entities without a SQL/virtual object must be consumed through a released
+OData/API or an ABAP-side contract.
 
 User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`NOT LIKE`, literal
 contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values
 remain prepared-statement parameters; identifiers remain validated and quoted.
 
-Node version `1.2` also provides three output modes:
+Node version `1.3` provides three output modes plus explicit BIGINT, date/timestamp, and binary
+conversion. Every execution also has a serialized-size cap:
 
 - **Each Row as an Item** for normal n8n item-by-item processing;
 - **All Rows in One Item** for a bounded array such as a report or AI context input;
@@ -284,7 +320,7 @@ the only boundary for advanced reads.
 
 ## AI Agent Tool
 
-Version `0.5.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
+Version `0.6.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
 AI Agent's **Tool** connector and configure one approved operation exactly as you would configure
 the normal node.
 
@@ -292,7 +328,8 @@ Recommended pattern:
 
 1. Use a HANA account with exact `SELECT` grants plus schema, object, column, and row policies.
 2. Enable **Allow AI Tool Use** and set conservative row and byte limits in the credential.
-3. Choose **Row → Select Rows**, **Get One by Key**, or **Aggregate Rows** in the Tool node.
+3. Choose a structured Row operation such as **Select Rows**, **Get One by Key**, **Aggregate
+   Rows**, **Count Rows**, **Distinct Values**, **Exists**, or **Preview Rows** in the Tool node.
 4. Fix the schema, table/view, columns, sorting, and ordinary filters in the workflow.
 5. Let the model supply only narrowly described filter values when needed; keep identifiers fixed.
 6. Give the Tool a specific description that says what data it returns and when to call it.
@@ -312,6 +349,10 @@ attach your own credential and replace the training schema and view names.
 [`examples/hana-guard-demo-0.5.json`](examples/hana-guard-demo-0.5.json) demonstrates a composite
 key lookup and input-item enrichment with node version `1.2`. It is sanitized and intentionally
 contains no credential binding.
+
+[`examples/hana-guard-complete-0.6.json`](examples/hana-guard-complete-0.6.json) demonstrates
+semantic/CDS runtime inspection, parameter discovery, prepared positional parameters, and bounded
+automatic composite pagination with node version `1.3`.
 
 The webinar examples are also sanitized:
 

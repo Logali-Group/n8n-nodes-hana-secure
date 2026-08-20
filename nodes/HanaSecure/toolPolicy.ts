@@ -10,9 +10,14 @@ export const ABSOLUTE_AI_TOOL_MAX_BYTES = 5_242_880;
 const AI_TOOL_NODE_TYPE = /(?:^|\.)hanaSecureTool$/;
 const AI_TOOL_ALLOWED_OPERATIONS = new Set([
 	'connection:testConnection',
+	'connection:getDatabaseInfo',
 	'rows:select',
 	'rows:getByKey',
 	'rows:aggregate',
+	'rows:count',
+	'rows:distinct',
+	'rows:exists',
+	'rows:preview',
 ]);
 
 export interface AiToolPolicy {

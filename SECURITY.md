@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the latest published minor version receives security fixes. Version `0.5.0` must be tested in
+Only the latest published minor version receives security fixes. Version `0.6.0` must be tested in
 a non-production, self-hosted n8n instance before being promoted to production.
 
 ## Reporting a vulnerability
@@ -30,7 +30,11 @@ Logali HANA Guard is designed for read-only automation. Its application controls
 - credential-required row filters that callers cannot remove;
 - TLS and certificate validation defaults;
 - connection and query timeouts;
-- enforced row and catalog output limits;
+- enforced row, page, catalog, and serialized output limits;
+- opaque composite continuation tokens and deterministic keyset ordering;
+- prepared bindings for positional semantic-view parameters and validated calculation-view
+  placeholder names;
+- safe database-error classification with credential and endpoint redaction;
 - literal catalog-prefix filtering with wildcard escaping;
 - credential redaction in driver error messages;
 - advanced SQL disabled at credential level by default;
@@ -71,7 +75,7 @@ prove that arbitrary nested SQL preserves every structured governance rule.
 
 ## MCP and AI tools
 
-Version `0.5.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
+Version `0.6.0` is marked `usableAsTool`, so n8n can generate **Logali HANA Guard Tool**. The
 generated variant refuses to run unless **Allow AI Tool Use** is enabled in the credential. It
 supports Connection and structured Row operations, applies credential-level row and byte caps,
 and rejects SQL (Advanced) unconditionally. Catalog discovery requires a second explicit switch.

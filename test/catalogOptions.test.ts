@@ -47,7 +47,31 @@ describe('dynamic governed catalog options', () => {
 			},
 			'TRAINING',
 		);
-		assert.deepEqual(options, [{ name: 'GL_ITEMS (table)', value: 'GL_ITEMS' }]);
+		assert.deepEqual(options, [
+			{ name: 'GL_ITEMS (table)', value: 'GL_ITEMS', description: 'HANA table' },
+		]);
+	});
+
+	it('labels virtual tables that may expose remote CDS runtime objects', async () => {
+		const options = await loadObjectOptions(
+			sessionWithRows([
+				{
+					OBJECT_NAME: 'REMOTE_ORDERS_P',
+					OBJECT_TYPE: 'VIRTUAL_TABLE',
+					HAS_PARAMETERS: 'UNKNOWN',
+				},
+			]),
+			{ ...baseCredentials, allowedSchemas: 'TRAINING' },
+			'TRAINING',
+		);
+		assert.deepEqual(options, [
+			{
+				name: 'REMOTE_ORDERS_P (virtual table)',
+				value: 'REMOTE_ORDERS_P',
+				description:
+					'HANA virtual table; it may expose a remote CDS or parameterized runtime object',
+			},
+		]);
 	});
 
 	it('hides columns outside the object policy', async () => {
