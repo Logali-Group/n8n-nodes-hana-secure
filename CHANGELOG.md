@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.0] - 2026-08-20
+
+### Added
+
+- Add governed discovery and description of valid HANA table functions.
+- Add node version `1.4` with a table-function row source, catalog-ordered named scalar inputs, and
+  prepared value binding.
+- Reuse Select, Preview, Count, Exists, Distinct, Aggregate, key lookup, column/row policies,
+  result caps, and composite pagination over table-function results.
+- Add a sanitized n8n workflow and reviewed non-production SQLScript setup template.
+
+### Security
+
+- Validate table-function metadata through `SYS.FUNCTIONS` and reject invalid, unknown, duplicate,
+  missing, table-type, array, or excessive inputs before invocation.
+- Require an explicit `Allowed Objects` entry before an AI Tool can discover, describe, or invoke a
+  table function.
+- Keep function implementation text out of catalog output and continue binding all values through
+  prepared statements.
+
+### Changed
+
+- Clarify that SAP HANA Cloud SQL endpoints normally use TLS over TCP port `443`.
+- Mark node version `1.4` as current while retaining versions `1`, `1.1`, `1.2`, and `1.3`.
+
 ## [0.6.0] - 2026-08-20
 
 ### Added

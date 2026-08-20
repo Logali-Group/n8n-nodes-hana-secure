@@ -6,10 +6,10 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.6.0` demonstration release. The package is public on npm with provenance and installs
-> by name on self-hosted n8n. The connection and read contract has been verified against SAP HANA
-> `2.00.088`; every new version should still pass a non-production HANA end-to-end test before it
-> is promoted to production.
+> Status: `0.7.0` development candidate. Version `0.6.0` is public on npm with provenance and
+> installs by name on self-hosted n8n. The connection and read contract has been verified against
+> SAP HANA `2.00.088`; the new table-function path still requires a non-production HANA end-to-end
+> test before `0.7.0` is published.
 
 ## Why this node exists
 
@@ -34,6 +34,8 @@ This package:
   runtime objects;
 - discovers positional view parameters and named calculation-view placeholders, then binds their
   values through prepared statements;
+- discovers, describes, and invokes governed HANA table functions with catalog-validated scalar
+  inputs and prepared values;
 - provides `Exists`, `Count`, `Distinct`, five-row `Preview`, and multiple aggregates per query;
 - discovers primary and unique keys, reports database information, and exposes a sanitized active
   governance policy summary;
@@ -76,8 +78,9 @@ services, or another SAP-supported transactional contract.
 - SAP HANA Platform or SAP HANA Cloud with an accessible SQL endpoint
 - TCP connectivity from the n8n host or container to the HANA SQL port
 
-This is not an OData node. An HTTPS/OData port such as `443` or a reverse-proxy port cannot be used
-as the HANA SQL port unless an administrator has explicitly configured a compatible TCP proxy.
+This is not an OData node. SAP HANA Cloud SQL endpoints normally use TLS over TCP port `443`, so
+`443` is valid when it belongs to the HANA Cloud SQL endpoint. An arbitrary web/OData endpoint on
+the same port is not interchangeable with a HANA SQL endpoint.
 
 The node uses the Apache-2.0-licensed `hdb` driver maintained by SAP contributors. The driver is
 bundled into the published artifact, so users do not need to install a native HANA client.
@@ -167,7 +170,7 @@ Create a **Logali HANA Guard API** credential with:
 | Field                        | Purpose                                                                                          |
 | ---------------------------- | ------------------------------------------------------------------------------------------------ |
 | Host                         | HANA SQL endpoint hostname or IP address                                                         |
-| SQL Port                     | Tenant database SQL port                                                                         |
+| SQL Port                     | Tenant SQL endpoint port; SAP HANA Cloud normally uses TCP 443                                    |
 | Database Name                | Optional tenant database name; leave empty when the endpoint already targets the tenant SQL port |
 | Ignore Server Topology       | Keeps NAT, forwarded, proxy, and managed endpoints on the configured host; enabled by default    |
 | Username / Password          | Dedicated technical user; never use a broad administrator                                        |
@@ -202,7 +205,7 @@ Policies use exact, unquoted HANA identifiers. For example:
 ```json
 {
 	"allowedSchemas": "TRAINING",
-	"allowedObjects": "TRAINING.GL_ITEMS,TRAINING.OPEN_ORDERS",
+	"allowedObjects": "TRAINING.GL_ITEMS,TRAINING.OPEN_ORDERS,TRAINING.GET_OPEN_ORDERS",
 	"columnPoliciesJson": "{\"TRAINING.GL_ITEMS\":[\"MANDT\",\"COMPANY_CODE\",\"AMOUNT\",\"CURRENCY\"]}",
 	"requiredFiltersJson": "{\"TRAINING.GL_ITEMS\":[{\"column\":\"MANDT\",\"operator\":\"eq\",\"value\":\"250\"}]}"
 }
@@ -221,8 +224,9 @@ allowlists, required filters on forbidden columns, and invalid AI result limits 
 Ask the HANA administrator for a dedicated technical user or role with:
 
 - connection permission;
-- `SELECT` only on the specific calculation views, tables, or training schema required;
-- no `INSERT`, `UPDATE`, `DELETE`, DDL, procedure execution, user administration, or system
+- `SELECT` only on the specific views or tables required, plus `EXECUTE` only on approved table
+  functions when they are used;
+- no `INSERT`, `UPDATE`, `DELETE`, DDL, unrestricted procedure/function execution, user administration, or system
   administration privileges.
 
 Exact grants depend on the HANA model and organizational policy. Do not copy a production business
@@ -241,6 +245,10 @@ user or database administrator account into n8n.
 - **List Schemas**: lists visible non-system schemas and applies the credential allowlist.
 - **List Tables and Views**: lists tables, SQL/calculation views, and virtual tables in one allowed
   schema, with an optional literal prefix and a result limit of 1–1,000 (100 by default).
+- **List Table Functions**: lists visible, valid table functions and their input counts and SQL
+  security mode, filtered by the same exact object allowlist.
+- **Describe Table Function**: returns its scalar inputs, output columns, SQL security mode, owner,
+  determinism, and creation metadata without exposing its implementation text.
 - **Describe Table or View**: returns approved column metadata, including comments and defaults
   when the HANA catalog version exposes them.
 - **Inspect Semantic/CDS Runtime View**: classifies SQL runtime views, calculation views, and HANA
@@ -275,6 +283,13 @@ For a parameterized runtime object, choose **Runtime View Parameters**:
   `PLACEHOLDER."$$P_NAME$$" => ?` bindings;
 - **No Input Parameters** reads a normal table or view.
 
+Node version `1.4` adds **Row Source → HANA Table Function**. Choose a valid function, add every
+scalar input by its catalog name, and then use the normal Select, Preview, Count, Exists, Distinct,
+Aggregate, key lookup, filters, output-column policy, required filters, limits, and composite
+pagination controls over the returned table. Table/array inputs are intentionally rejected in this
+first guarded contract. For AI Tool execution, the function must be named explicitly in
+**Allowed Objects**; an empty object allowlist is not accepted for function discovery or invocation.
+
 The node executes the HANA object that actually exists at SQL runtime. It does not parse or execute
 ABAP CDS DDL source. A CDS view with a generated SQL runtime object can be selected through that
 object; a remotely exposed parameterized object can be selected through a configured HANA virtual
@@ -285,7 +300,7 @@ User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`N
 contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values
 remain prepared-statement parameters; identifiers remain validated and quoted.
 
-Node version `1.3` provides three output modes plus explicit BIGINT, date/timestamp, and binary
+Node version `1.3+` provides three output modes plus explicit BIGINT, date/timestamp, and binary
 conversion. Every execution also has a serialized-size cap:
 
 - **Each Row as an Item** for normal n8n item-by-item processing;
@@ -320,7 +335,7 @@ the only boundary for advanced reads.
 
 ## AI Agent Tool
 
-Version `0.6.0` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
+Version `0.6.0+` lets n8n generate **Logali HANA Guard Tool** from the same node. Add it from an
 AI Agent's **Tool** connector and configure one approved operation exactly as you would configure
 the normal node.
 
@@ -353,6 +368,11 @@ contains no credential binding.
 [`examples/hana-guard-complete-0.6.json`](examples/hana-guard-complete-0.6.json) demonstrates
 semantic/CDS runtime inspection, parameter discovery, prepared positional parameters, and bounded
 automatic composite pagination with node version `1.3`.
+
+[`examples/hana-guard-table-function-0.7.json`](examples/hana-guard-table-function-0.7.json)
+demonstrates function discovery, description, prepared named inputs, governed output columns, and
+bounded composite pagination with node version `1.4`. The corresponding reviewed lab DDL template
+is [`sql/setup_table_function_demo.sql`](sql/setup_table_function_demo.sql).
 
 The webinar examples are also sanitized:
 

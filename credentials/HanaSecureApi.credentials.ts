@@ -25,7 +25,8 @@ export class HanaSecureApi implements ICredentialType {
 			name: 'port',
 			type: 'number',
 			default: 30015,
-			description: 'SAP HANA SQL port, not the HTTPS or OData port',
+			description:
+				'SAP HANA SQL endpoint port. HANA Cloud SQL endpoints normally use TCP 443; this is still a database connection, not HTTPS or OData.',
 			required: true,
 		},
 		{
