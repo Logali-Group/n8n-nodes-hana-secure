@@ -15,6 +15,13 @@
 #        Environment:      (leave blank unless you use GitHub Environments)
 #   4. Allow `npm publish` for the trusted publisher.
 #
+# First-publication bootstrap:
+#   npm cannot attach a Trusted Publisher until the package exists. For the
+#   first tag only, create a short-lived granular npm token with publish access
+#   and store it as the repository secret NPM_TOKEN. The workflow publishes
+#   with GitHub provenance, then the token must be deleted after Trusted
+#   Publishing is configured. Later releases use OIDC without a token.
+#
 # ─── TAG CONVENTION ────────────────────────────────────────────────────────────
 #
 # This workflow uses GitHub release tags with a "v" prefix (for example v0.4.0).
@@ -68,5 +75,23 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Publish
+      - name: Detect first-publication bootstrap
+        id: publish-auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bootstrap=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish first version with temporary token
+        if: steps.publish-auth.outputs.bootstrap == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: Publish with npm Trusted Publishing
+        if: steps.publish-auth.outputs.bootstrap == 'false'
         run: npm publish --access public
