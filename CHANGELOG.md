@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-08-20
+
+### Added
+
+- Add stable composite-key pagination with opaque continuation tokens and bounded automatic page
+  collection.
+- Add SQL runtime, calculation-view, and virtual-table recognition for semantic/CDS-backed HANA
+  objects, plus parameter discovery and prepared positional/placeholder execution.
+- Add `Exists`, `Count`, `Distinct`, five-row `Preview`, multiple aggregates, constraint/key
+  discovery, database information, and sanitized governance-policy inspection.
+- Add explicit BIGINT, date/timestamp, and binary JSON conversion plus a workflow result-size cap.
+- Add per-execution connection reuse, query counts/fingerprints, and safe error categories with
+  retryability hints.
+- Add a sanitized node v1.3 workflow demonstrating semantic inspection and automatic pagination.
+
+### Security
+
+- Validate semantic placeholder names while binding every value through prepared statements.
+- Enforce maximum automatic rows/pages and serialized workflow result size.
+- Redact credentials and endpoints from driver errors returned through `Continue On Fail`.
+
+### Changed
+
+- Mark node version `1.3` as current while retaining versions `1`, `1.1`, and `1.2`.
+- Discover governed HANA virtual tables and columns alongside tables and views.
+
 ## [0.5.0] - 2026-08-20
 
 ### Added

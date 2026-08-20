@@ -59,10 +59,10 @@ export async function loadObjectOptions(
 		? [schema, ...governedNames, schema, ...governedNames]
 		: [schema, schema];
 	const rows = await session.query(
-		`SELECT "TABLE_NAME" AS "OBJECT_NAME", 'TABLE' AS "OBJECT_TYPE"
+		`SELECT "TABLE_NAME" AS "OBJECT_NAME", CASE WHEN "TABLE_TYPE" = 'VIRTUAL' THEN 'VIRTUAL_TABLE' ELSE 'TABLE' END AS "OBJECT_TYPE", NULL AS "VIEW_TYPE", CASE WHEN "TABLE_TYPE" = 'VIRTUAL' THEN 'UNKNOWN' ELSE 'FALSE' END AS "HAS_PARAMETERS"
 FROM "SYS"."TABLES" WHERE "SCHEMA_NAME" = ?${objectPredicate}
 UNION ALL
-SELECT "VIEW_NAME" AS "OBJECT_NAME", 'VIEW' AS "OBJECT_TYPE"
+SELECT "VIEW_NAME" AS "OBJECT_NAME", 'VIEW' AS "OBJECT_TYPE", "VIEW_TYPE", "HAS_PARAMETERS"
 FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ?${viewPredicate}
 ORDER BY "OBJECT_TYPE", "OBJECT_NAME"
 LIMIT ${MAX_DYNAMIC_OPTIONS + 1}`,
@@ -72,10 +72,24 @@ LIMIT ${MAX_DYNAMIC_OPTIONS + 1}`,
 	return rows
 		.filter((row) => isObjectAllowed(schema, String(row.OBJECT_NAME), allowedObjects))
 		.slice(0, MAX_DYNAMIC_OPTIONS)
-		.map((row) => ({
-			name: `${String(row.OBJECT_NAME)} (${String(row.OBJECT_TYPE).toLowerCase()})`,
-			value: String(row.OBJECT_NAME),
-		}));
+		.map((row) => {
+			const isCalculationView = String(row.VIEW_TYPE).toUpperCase() === 'CALC';
+			const objectLabel = isCalculationView
+				? 'calculation view'
+				: String(row.OBJECT_TYPE).toUpperCase() === 'VIRTUAL_TABLE'
+					? 'virtual table'
+					: String(row.OBJECT_TYPE).toLowerCase();
+			return {
+				name: `${String(row.OBJECT_NAME)} (${objectLabel})`,
+				value: String(row.OBJECT_NAME),
+				description:
+					String(row.OBJECT_TYPE).toUpperCase() === 'VIRTUAL_TABLE'
+						? 'HANA virtual table; it may expose a remote CDS or parameterized runtime object'
+						: String(row.HAS_PARAMETERS).toUpperCase() === 'TRUE'
+							? 'Parameterized HANA runtime view'
+							: `HANA ${objectLabel}`,
+			};
+		});
 }
 
 export async function loadColumnOptions(
@@ -93,12 +107,20 @@ export async function loadColumnOptions(
 
 	const rows = await session.query(
 		`SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"
-FROM "SYS"."TABLE_COLUMNS" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?
+FROM "SYS"."TABLE_COLUMNS" AS "TC"
+WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?
+AND NOT EXISTS (
+	SELECT 1 FROM "SYS"."VIRTUAL_TABLES" AS "VT"
+	WHERE "VT"."SCHEMA_NAME" = "TC"."SCHEMA_NAME" AND "VT"."TABLE_NAME" = "TC"."TABLE_NAME"
+)
 UNION ALL
 SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"
 FROM "SYS"."VIEW_COLUMNS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?
+UNION ALL
+SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"
+FROM "SYS"."VIRTUAL_COLUMNS" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?
 ORDER BY "POSITION"`,
-		[schema, objectName, schema, objectName],
+		[schema, objectName, schema, objectName, schema, objectName],
 	);
 	const allowedColumns = allowedColumnsForObject(schema, objectName, columnPolicies);
 	const allowed = allowedColumns

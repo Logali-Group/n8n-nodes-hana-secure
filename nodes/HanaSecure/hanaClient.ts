@@ -1,9 +1,24 @@
 import { createClient, type Client, type ClientOptions, type Statement } from 'hdb';
 
+import { toSafeHanaError } from './errors';
 import type { HanaCredentials } from './types';
 
 export interface HanaSession {
 	query(sql: string, parameters?: unknown[]): Promise<Record<string, unknown>[]>;
+	diagnostics(): {
+		queryCount: number;
+		lastQueryFingerprint?: string;
+	};
+}
+
+export function queryFingerprint(sql: string): string {
+	const normalized = sql.replace(/\s+/g, ' ').trim();
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < normalized.length; index += 1) {
+		hash ^= normalized.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function connectClient(client: Client, timeoutMs: number): Promise<void> {
@@ -84,16 +99,6 @@ export function createClientOptions(credentials: HanaCredentials): ClientOptions
 	return options;
 }
 
-function redactError(error: unknown, credentials: HanaCredentials): Error {
-	const original = error instanceof Error ? error.message : String(error);
-	const secrets = [credentials.password, credentials.user].filter(Boolean);
-	const redacted = secrets.reduce(
-		(message, secret) => message.split(secret).join('[REDACTED]'),
-		original,
-	);
-	return new Error(`SAP HANA request failed: ${redacted}`);
-}
-
 export async function withHanaClient<T>(
 	credentials: HanaCredentials,
 	callback: (session: HanaSession) => Promise<T>,
@@ -124,8 +129,12 @@ export async function withHanaClient<T>(
 	try {
 		await connectClient(client, Number(credentials.connectionTimeout));
 		connected = true;
+		let queryCount = 0;
+		let lastQueryFingerprint: string | undefined;
 		const session: HanaSession = {
 			async query(sql, parameters = []) {
+				queryCount += 1;
+				lastQueryFingerprint = queryFingerprint(sql);
 				if (parameters.length === 0) return await timeout(executeDirect(client, sql));
 				const statement = await timeout(prepare(client, sql));
 				try {
@@ -134,10 +143,13 @@ export async function withHanaClient<T>(
 					await dropStatement(statement);
 				}
 			},
+			diagnostics() {
+				return { queryCount, ...(lastQueryFingerprint ? { lastQueryFingerprint } : {}) };
+			},
 		};
 		return await callback(session);
 	} catch (error) {
-		throw redactError(error, credentials);
+		throw toSafeHanaError(error, credentials);
 	} finally {
 		if (connected && !timedOut) closeClient(client);
 	}

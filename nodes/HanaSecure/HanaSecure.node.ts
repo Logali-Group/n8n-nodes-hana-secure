@@ -15,6 +15,7 @@ import {
 } from 'n8n-workflow';
 
 import { loadColumnOptions, loadObjectOptions, loadSchemaOptions } from './catalogOptions';
+import { hanaErrorOutput } from './errors';
 import { withHanaClient, type HanaSession } from './hanaClient';
 import {
 	allowedObjectNamesForSchema,
@@ -29,9 +30,22 @@ import {
 	requiredFiltersForObject,
 	validateGovernanceConfiguration,
 } from './governance';
-import { rowsToJson } from './json';
+import { enforceJsonByteLimit, rowsToJson } from './json';
 import { formatHanaOutput, type HanaOutputMode } from './output';
-import { readCursorValue } from './pagination';
+import {
+	assertCursorColumns,
+	buildCompositeKeysetWhere,
+	collectKeysetPages,
+	cursorOrderBy,
+	decodeCursor,
+	readCursorValue,
+	type KeysetCursor,
+} from './pagination';
+import {
+	buildSemanticSource,
+	type SemanticParameterInput,
+	type SemanticParameterMode,
+} from './semanticViews';
 import {
 	assertIdentifier,
 	assertSchemaAllowed,
@@ -159,10 +173,10 @@ async function executeCatalogOperation(
 				]
 			: [schema, `${escapedPrefix}%`, schema, `${escapedPrefix}%`];
 		const rows = await session.query(
-			`SELECT "SCHEMA_NAME", "TABLE_NAME" AS "OBJECT_NAME", 'TABLE' AS "OBJECT_TYPE"
+			`SELECT "SCHEMA_NAME", "TABLE_NAME" AS "OBJECT_NAME", CASE WHEN "TABLE_TYPE" = 'VIRTUAL' THEN 'VIRTUAL_TABLE' ELSE 'TABLE' END AS "OBJECT_TYPE", NULL AS "VIEW_TYPE", CASE WHEN "TABLE_TYPE" = 'VIRTUAL' THEN 'UNKNOWN' ELSE 'FALSE' END AS "HAS_PARAMETERS"
 FROM "SYS"."TABLES" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" LIKE ? ESCAPE '\\'${objectPredicate}
 UNION ALL
-SELECT "SCHEMA_NAME", "VIEW_NAME" AS "OBJECT_NAME", 'VIEW' AS "OBJECT_TYPE"
+SELECT "SCHEMA_NAME", "VIEW_NAME" AS "OBJECT_NAME", 'VIEW' AS "OBJECT_TYPE", "VIEW_TYPE", "HAS_PARAMETERS"
 FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" LIKE ? ESCAPE '\\'${viewPredicate}
 ORDER BY "OBJECT_TYPE", "OBJECT_NAME"
 LIMIT ${limit + 1}`,
@@ -176,14 +190,162 @@ LIMIT ${limit + 1}`,
 		});
 	}
 
-	const objectType = context.getNodeParameter('objectType', itemIndex) as 'table' | 'view';
+	const objectType = context.getNodeParameter('objectType', itemIndex, 'auto') as
+		| 'auto'
+		| 'table'
+		| 'view';
 	const objectName = assertIdentifier(
 		context.getNodeParameter('objectName', itemIndex) as string,
 		'object name',
 	);
 	assertObjectAllowed(schema, objectName, allowedObjects);
-	const catalogView = objectType === 'view' ? 'VIEW_COLUMNS' : 'TABLE_COLUMNS';
-	const objectColumn = objectType === 'view' ? 'VIEW_NAME' : 'TABLE_NAME';
+	if (operation === 'listConstraints') {
+		const rows = await session.query(
+			`SELECT "CONSTRAINT_NAME", "COLUMN_NAME", "POSITION", "IS_PRIMARY_KEY", "IS_UNIQUE_KEY"
+FROM "SYS"."CONSTRAINTS"
+WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?
+ORDER BY "CONSTRAINT_NAME", "POSITION"`,
+			[schema, objectName],
+		);
+		const allowedColumns = allowedColumnsForObject(schema, objectName, columnPolicies);
+		const governedRows = allowedColumns
+			? rows.filter((row) =>
+					allowedColumns.some(
+						(column) => column.toUpperCase() === String(row.COLUMN_NAME).toUpperCase(),
+					),
+				)
+			: rows;
+		return addResultMetadata(governedRows, operation, 100, true, {
+			primaryKeyColumns: governedRows
+				.filter((row) => String(row.IS_PRIMARY_KEY).toUpperCase() === 'TRUE')
+				.map((row) => row.COLUMN_NAME),
+		});
+	}
+	if (operation === 'inspectSemanticView') {
+		const rows = await session.query(
+			`SELECT "SCHEMA_NAME", "VIEW_NAME", "VIEW_TYPE", "IS_COLUMN_VIEW", "IS_READ_ONLY", "IS_VALID", "HAS_PARAMETERS", "COMMENTS"
+FROM "SYS"."VIEWS"
+WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?`,
+			[schema, objectName],
+		);
+		if (rows.length === 0) {
+			const virtualRows = await session.query(
+				`SELECT "SCHEMA_NAME", "TABLE_NAME", "REMOTE_SOURCE_NAME", "REMOTE_DB_NAME", "REMOTE_OWNER_NAME", "REMOTE_OBJECT_NAME", "IS_SELECTABLE"
+FROM "SYS"."VIRTUAL_TABLES"
+WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?`,
+				[schema, objectName],
+			);
+			if (virtualRows.length === 0) {
+				throw new OperationalError(
+					'The selected object is not a visible HANA runtime SQL or virtual view.',
+				);
+			}
+			return virtualRows.map((row) => ({
+				...row,
+				SEMANTIC_KIND: 'VIRTUAL_RUNTIME_VIEW',
+				DIRECT_SQL_QUERYABLE: String(row.IS_SELECTABLE).toUpperCase() === 'TRUE',
+				REQUIRES_PARAMETERS: 'UNKNOWN',
+				CDS_NOTE:
+					'This virtual table can expose a remote runtime object, including an ABAP CDS-backed object when configured through supported HANA data access. Use List Semantic View Parameters to inspect its positional parameters.',
+			}));
+		}
+		return rows.map((row) => ({
+			...row,
+			SEMANTIC_KIND:
+				String(row.VIEW_TYPE).toUpperCase() === 'CALC'
+					? 'HANA_CALCULATION_VIEW'
+					: String(row.HAS_PARAMETERS).toUpperCase() === 'TRUE'
+						? 'PARAMETERIZED_HANA_VIEW'
+						: 'SQL_RUNTIME_VIEW',
+			DIRECT_SQL_QUERYABLE: String(row.IS_VALID).toUpperCase() === 'TRUE',
+			REQUIRES_PARAMETERS: String(row.HAS_PARAMETERS).toUpperCase() === 'TRUE',
+			CDS_NOTE:
+				'HANA exposes the runtime SQL view, not the ABAP CDS source. ABAP CDS view entities without a SQL view require a released API, OData, or ABAP access.',
+		}));
+	}
+	if (operation === 'listSemanticParameters') {
+		const viewRows = await session.query(
+			`SELECT "VIEW_TYPE", "HAS_PARAMETERS"
+FROM "SYS"."VIEWS"
+WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?`,
+			[schema, objectName],
+		);
+		if (viewRows.length === 0) {
+			const virtualRows = await session.query(
+				`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "LENGTH", "SCALE", "POSITION", "HAS_DEFAULT_VALUE", "IS_MANDATORY", "DEFAULT_VALUE"
+FROM "SYS"."VIRTUAL_TABLE_PARAMETERS"
+WHERE "SCHEMA_NAME" = ? AND "OBJECT_NAME" = ?
+ORDER BY "POSITION"`,
+				[schema, objectName],
+			);
+			return addResultMetadata(
+				virtualRows.map((row) => ({
+					...row,
+					BINDING_MODE: 'SQL_POSITIONAL',
+					INPUT_NAME: row.PARAMETER_NAME,
+				})),
+				operation,
+				20,
+				true,
+				{ semanticKind: 'VIRTUAL_RUNTIME_VIEW', hasParameters: virtualRows.length > 0 },
+			);
+		}
+		const isCalculationView = String(viewRows[0].VIEW_TYPE).toUpperCase() === 'CALC';
+		const rows = isCalculationView
+			? await session.query(
+					`SELECT "PARAMETER_NAME", "IS_MANDATORY", "DEFAULT_VALUE"
+FROM "SYS"."CS_VIEW_PARAMETERS"
+WHERE "SCHEMA_NAME" = ? AND "OBJECT_NAME" = ?
+ORDER BY "PARAMETER_NAME"`,
+					[schema, objectName],
+				)
+			: await session.query(
+					`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "LENGTH", "SCALE", "POSITION", "HAS_DEFAULT_VALUE"
+FROM "SYS"."VIEW_PARAMETERS"
+WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?
+ORDER BY "POSITION"`,
+					[schema, objectName],
+				);
+		return addResultMetadata(
+			rows.map((row) => ({
+				...row,
+				BINDING_MODE: isCalculationView ? 'CALCULATION_PLACEHOLDER' : 'SQL_POSITIONAL',
+				INPUT_NAME: isCalculationView
+					? String(row.PARAMETER_NAME).replace(/^\$\$(.*)\$\$$/, '$1')
+					: row.PARAMETER_NAME,
+			})),
+			operation,
+			20,
+			true,
+			{
+				semanticKind: isCalculationView ? 'HANA_CALCULATION_VIEW' : 'PARAMETERIZED_HANA_VIEW',
+				hasParameters: String(viewRows[0].HAS_PARAMETERS).toUpperCase() === 'TRUE',
+			},
+		);
+	}
+	let resolvedObjectType: 'auto' | 'table' | 'view' | 'virtual_table' = objectType;
+	if (objectType === 'auto') {
+		const typeRows = await session.query(
+			`SELECT CASE WHEN "TABLE_TYPE" = 'VIRTUAL' THEN 'VIRTUAL_TABLE' ELSE 'TABLE' END AS "OBJECT_TYPE" FROM "SYS"."TABLES" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?
+UNION ALL
+SELECT 'VIEW' AS "OBJECT_TYPE" FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?
+LIMIT 1`,
+			[schema, objectName, schema, objectName],
+		);
+		if (typeRows.length === 0)
+			throw new OperationalError('The table or view is not visible in HANA.');
+		resolvedObjectType = String(typeRows[0].OBJECT_TYPE).toLowerCase() as
+			| 'table'
+			| 'view'
+			| 'virtual_table';
+	}
+	const catalogView =
+		resolvedObjectType === 'view'
+			? 'VIEW_COLUMNS'
+			: resolvedObjectType === 'virtual_table'
+				? 'VIRTUAL_COLUMNS'
+				: 'TABLE_COLUMNS';
+	const objectColumn = resolvedObjectType === 'view' ? 'VIEW_NAME' : 'TABLE_NAME';
 	let rows: Record<string, unknown>[];
 	try {
 		rows = await session.query(
@@ -252,9 +414,48 @@ async function executeRowsOperation(
 	const userWhere = buildWhereClause(filters, filterLogic);
 	const requiredWhere = buildWhereClause(requiredFilters, 'AND');
 	const limit = rowLimit(context.getNodeParameter('limit', itemIndex) as number, aiToolMaxRows);
-	const tableReference = `${quoteIdentifier(schema)}.${quoteIdentifier(objectName)}`;
+	const requestedSemanticParameterMode =
+		context.getNode().typeVersion >= 1.3
+			? (context.getNodeParameter('semanticParameterMode', itemIndex, 'auto') as
+					| SemanticParameterMode
+					| 'auto')
+			: 'none';
+	const semanticParameters = valuesFromCollection<SemanticParameterInput>(
+		context.getNodeParameter('semanticParameters', itemIndex, {}),
+	);
+	let semanticParameterMode: SemanticParameterMode =
+		requestedSemanticParameterMode === 'auto' ? 'none' : requestedSemanticParameterMode;
+	if (requestedSemanticParameterMode === 'auto') {
+		const viewRows = await session.query(
+			`SELECT "VIEW_TYPE", "HAS_PARAMETERS" FROM "SYS"."VIEWS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?`,
+			[schema, objectName],
+		);
+		if (viewRows.length > 0 && String(viewRows[0].HAS_PARAMETERS).toUpperCase() === 'TRUE') {
+			semanticParameterMode =
+				String(viewRows[0].VIEW_TYPE).toUpperCase() === 'CALC'
+					? 'calculationPlaceholders'
+					: 'sqlPositional';
+		} else if (viewRows.length === 0) {
+			const virtualParameterRows = await session.query(
+				`SELECT COUNT(*) AS "PARAMETER_COUNT" FROM "SYS"."VIRTUAL_TABLE_PARAMETERS" WHERE "SCHEMA_NAME" = ? AND "OBJECT_NAME" = ?`,
+				[schema, objectName],
+			);
+			if (Number(virtualParameterRows[0]?.PARAMETER_COUNT ?? 0) > 0) {
+				semanticParameterMode = 'sqlPositional';
+			}
+		}
+	}
+	const semanticSource = buildSemanticSource(
+		schema,
+		objectName,
+		semanticParameterMode,
+		semanticParameters,
+	);
+	const tableReference = semanticSource.sql;
+	const sourceParameters = semanticSource.parameters;
 	const policyMetadata = {
 		source: `${schema}.${objectName}`,
+		semanticParameterMode,
 		objectAllowlistApplied: allowedObjects.size > 0,
 		columnPolicyApplied: allowedColumns !== undefined,
 		requiredFilterCount: requiredFilters.length,
@@ -270,9 +471,19 @@ async function executeRowsOperation(
 			allowedColumns,
 		);
 
-		const rawColumns = context.getNodeParameter('columns', itemIndex) as string;
+		const rawColumns = context.getNodeParameter('columns', itemIndex, '*') as string;
+		const guidedColumns =
+			context.getNode().typeVersion >= 1.3
+				? (context.getNodeParameter('selectedColumns', itemIndex, []) as string[])
+				: [];
 		const selectedColumns =
-			rawColumns.trim() === '*' ? allowedColumns : parseIdentifierList(rawColumns, 'column');
+			context.getNode().typeVersion >= 1.3
+				? guidedColumns.length > 0
+					? guidedColumns.map((column) => assertIdentifier(column, 'column'))
+					: allowedColumns
+				: rawColumns.trim() === '*'
+					? allowedColumns
+					: parseIdentifierList(rawColumns, 'column');
 		if (selectedColumns) assertColumnsAllowed(selectedColumns, allowedColumns);
 		const columns = selectedColumns
 			? selectedColumns.map((column) => quoteIdentifier(column)).join(', ')
@@ -282,7 +493,7 @@ async function executeRowsOperation(
 		const queryStartedAt = Date.now();
 		const rows = await session.query(
 			`SELECT ${columns} FROM ${tableReference}${where.sql} LIMIT 2`,
-			where.parameters,
+			[...sourceParameters, ...where.parameters],
 		);
 		const durationMs = Date.now() - queryStartedAt;
 		if (rows.length > 1) {
@@ -305,14 +516,80 @@ async function executeRowsOperation(
 		});
 	}
 
-	if (operation === 'select') {
-		const rawColumns = context.getNodeParameter('columns', itemIndex) as string;
+	if (operation === 'exists' || operation === 'count') {
+		const where = combineWhereClauses(requiredWhere, userWhere);
+		const queryStartedAt = Date.now();
+		const rows =
+			operation === 'exists'
+				? await session.query(
+						`SELECT 1 AS "MATCH_FOUND" FROM ${tableReference}${where.sql} LIMIT 1`,
+						[...sourceParameters, ...where.parameters],
+					)
+				: await session.query(`SELECT COUNT(*) AS "ROW_COUNT" FROM ${tableReference}${where.sql}`, [
+						...sourceParameters,
+						...where.parameters,
+					]);
+		const result =
+			operation === 'exists'
+				? [{ EXISTS: rows.length === 1 }]
+				: [{ ROW_COUNT: rows[0]?.ROW_COUNT ?? 0 }];
+		return addResultMetadata(result, operation, 1, true, {
+			...policyMetadata,
+			durationMs: Date.now() - queryStartedAt,
+		});
+	}
+
+	if (operation === 'select' || operation === 'preview' || operation === 'distinct') {
+		const guidedColumns =
+			context.getNode().typeVersion >= 1.3
+				? (context.getNodeParameter('selectedColumns', itemIndex, []) as string[])
+				: [];
+		const rawColumns = context.getNodeParameter('columns', itemIndex, '*') as string;
 		const selectedColumns =
-			rawColumns.trim() === '*' ? allowedColumns : parseIdentifierList(rawColumns, 'column');
+			context.getNode().typeVersion >= 1.3
+				? guidedColumns.length > 0
+					? guidedColumns.map((column) => assertIdentifier(column, 'column'))
+					: allowedColumns
+				: rawColumns.trim() === '*'
+					? allowedColumns
+					: parseIdentifierList(rawColumns, 'column');
 		if (selectedColumns) assertColumnsAllowed(selectedColumns, allowedColumns);
 		const columns = selectedColumns
 			? selectedColumns.map((column) => quoteIdentifier(column)).join(', ')
 			: '*';
+		if (operation === 'distinct') {
+			if (!selectedColumns || selectedColumns.length === 0) {
+				throw new OperationalError('Select at least one approved column for Distinct Values.');
+			}
+			const where = combineWhereClauses(requiredWhere, userWhere);
+			const distinctLimit = rowLimit(
+				context.getNodeParameter('limit', itemIndex, 50) as number,
+				aiToolMaxRows,
+			);
+			const queryStartedAt = Date.now();
+			const rows = await session.query(
+				`SELECT DISTINCT ${columns} FROM ${tableReference}${where.sql} ORDER BY ${columns} LIMIT ${distinctLimit + 1}`,
+				[...sourceParameters, ...where.parameters],
+			);
+			return addResultMetadata(rows, operation, distinctLimit, true, {
+				...policyMetadata,
+				durationMs: Date.now() - queryStartedAt,
+			});
+		}
+		if (operation === 'preview') {
+			const previewLimit = 5;
+			const where = combineWhereClauses(requiredWhere, userWhere);
+			const queryStartedAt = Date.now();
+			const rows = await session.query(
+				`SELECT ${columns} FROM ${tableReference}${where.sql} LIMIT ${previewLimit}`,
+				[...sourceParameters, ...where.parameters],
+			);
+			return addResultMetadata(rows, operation, previewLimit, true, {
+				...policyMetadata,
+				durationMs: Date.now() - queryStartedAt,
+				preview: true,
+			});
+		}
 		let orderBy = valuesFromCollection<OrderBy>(context.getNodeParameter('orderBy', itemIndex, {}));
 		assertColumnsAllowed(
 			orderBy.map((sort) => sort.column),
@@ -320,6 +597,95 @@ async function executeRowsOperation(
 		);
 
 		const paginationMode = context.getNodeParameter('paginationMode', itemIndex, 'none') as string;
+		if (context.getNode().typeVersion >= 1.3 && paginationMode !== 'none') {
+			const cursorColumns = assertCursorColumns(
+				(context.getNodeParameter('cursorColumns', itemIndex, []) as string[]).map((column) =>
+					assertIdentifier(column, 'cursor column'),
+				),
+			);
+			assertColumnsAllowed(cursorColumns, allowedColumns);
+			if (
+				selectedColumns &&
+				cursorColumns.some(
+					(cursorColumn) =>
+						!selectedColumns.some((column) => column.toUpperCase() === cursorColumn.toUpperCase()),
+				)
+			) {
+				throw new OperationalError('Every cursor column must be included in Selected Columns.');
+			}
+			const cursorDirection = context.getNodeParameter('cursorDirection', itemIndex, 'ASC') as
+				| 'ASC'
+				| 'DESC';
+			orderBy = cursorOrderBy(cursorColumns, cursorDirection, orderBy);
+			const baseWhere = combineWhereClauses(requiredWhere, userWhere);
+			const pageSize = rowLimit(
+				context.getNodeParameter('limit', itemIndex) as number,
+				aiToolMaxRows,
+			);
+			let cursor: KeysetCursor | undefined;
+			if (paginationMode === 'keysetContinue') {
+				cursor = decodeCursor(context.getNodeParameter('cursorToken', itemIndex) as string);
+				if (
+					cursor.direction !== cursorDirection ||
+					cursor.columns.map((column) => column.toUpperCase()).join('|') !==
+						cursorColumns.map((column) => column.toUpperCase()).join('|')
+				) {
+					throw new OperationalError(
+						'The cursor token does not match the configured cursor columns and direction.',
+					);
+				}
+			}
+
+			const automatic = paginationMode === 'automatic';
+			const maximumRows = automatic
+				? Math.min(
+						context.getNodeParameter('automaticMaxRows', itemIndex, 5000) as number,
+						aiToolMaxRows ?? 10_000,
+					)
+				: pageSize;
+			const maximumPages = automatic
+				? (context.getNodeParameter('automaticMaxPages', itemIndex, 50) as number)
+				: 1;
+			if (!Number.isInteger(maximumRows) || maximumRows < 1 || maximumRows > 10_000) {
+				throw new OperationalError(
+					'Automatic pagination maximum rows must be between 1 and 10000.',
+				);
+			}
+			if (!Number.isInteger(maximumPages) || maximumPages < 1 || maximumPages > 100) {
+				throw new OperationalError('Automatic pagination maximum pages must be between 1 and 100.');
+			}
+
+			const queryStartedAt = Date.now();
+			const pageCollection = await collectKeysetPages(
+				cursorColumns,
+				cursorDirection,
+				pageSize,
+				maximumRows,
+				maximumPages,
+				cursor,
+				async (pageCursor, currentLimit) => {
+					const cursorWhere = pageCursor
+						? buildCompositeKeysetWhere(pageCursor)
+						: { sql: '', parameters: [] };
+					const where = combineWhereClauses(baseWhere, cursorWhere);
+					return await session.query(
+						`SELECT ${columns} FROM ${tableReference}${where.sql}${buildOrderByClause(orderBy)} LIMIT ${currentLimit + 1}`,
+						[...sourceParameters, ...where.parameters],
+					);
+				},
+			);
+			return addResultMetadata(pageCollection.rows, operation, maximumRows, true, {
+				...policyMetadata,
+				durationMs: Date.now() - queryStartedAt,
+				paginationMode,
+				pagesFetched: pageCollection.pagesFetched,
+				hasMore: pageCollection.hasMore,
+				truncated: pageCollection.hasMore,
+				...(pageCollection.nextCursor === undefined
+					? {}
+					: { nextCursor: pageCollection.nextCursor, cursorColumns, cursorDirection }),
+			});
+		}
 		let cursorColumn: string | undefined;
 		let cursorDirection: 'ASC' | 'DESC' = 'ASC';
 		let cursorWhere = { sql: '', parameters: [] as unknown[] };
@@ -364,7 +730,7 @@ async function executeRowsOperation(
 		const where = combineWhereClauses(requiredWhere, userWhere, cursorWhere);
 		const sql = `SELECT ${columns} FROM ${tableReference}${where.sql}${buildOrderByClause(orderBy)} LIMIT ${limit + 1}`;
 		const queryStartedAt = Date.now();
-		const rows = await session.query(sql, where.parameters);
+		const rows = await session.query(sql, [...sourceParameters, ...where.parameters]);
 		const durationMs = Date.now() - queryStartedAt;
 		const includeMetadata =
 			paginationMode !== 'none' ||
@@ -384,36 +750,70 @@ async function executeRowsOperation(
 		});
 	}
 
-	const aggregateFunction = context.getNodeParameter('aggregateFunction', itemIndex) as string;
-	const aggregateColumn = context.getNodeParameter('aggregateColumn', itemIndex, '') as string;
-	const aggregateAlias = quoteIdentifier(
-		context.getNodeParameter('aggregateAlias', itemIndex) as string,
-		'aggregate alias',
+	const aggregateDefinitions =
+		context.getNode().typeVersion >= 1.3
+			? valuesFromCollection<{ function: string; column?: string; alias: string }>(
+					context.getNodeParameter('aggregates', itemIndex, {}),
+				)
+			: [
+					{
+						function: context.getNodeParameter('aggregateFunction', itemIndex) as string,
+						column: context.getNodeParameter('aggregateColumn', itemIndex, '') as string,
+						alias: context.getNodeParameter('aggregateAlias', itemIndex) as string,
+					},
+				];
+	if (aggregateDefinitions.length === 0) {
+		throw new OperationalError('Add at least one aggregate calculation.');
+	}
+	if (aggregateDefinitions.length > 10) {
+		throw new OperationalError('A query supports at most 10 aggregate calculations.');
+	}
+	const aliases = aggregateDefinitions.map((aggregate) =>
+		assertIdentifier(aggregate.alias, 'aggregate alias'),
 	);
-	const aggregateExpression =
-		aggregateFunction === 'COUNT'
-			? 'COUNT(*)'
-			: aggregateFunction === 'COUNT_DISTINCT'
-				? `COUNT(DISTINCT ${quoteIdentifier(aggregateColumn, 'aggregate column')})`
-				: `${aggregateFunction}(${quoteIdentifier(aggregateColumn, 'aggregate column')})`;
+	if (new Set(aliases.map((alias) => alias.toUpperCase())).size !== aliases.length) {
+		throw new OperationalError('Aggregate aliases must be unique.');
+	}
+	const aggregateColumns = aggregateDefinitions
+		.filter((aggregate) => aggregate.function !== 'COUNT')
+		.map((aggregate) => assertIdentifier(aggregate.column ?? '', 'aggregate column'));
+	const aggregateExpressions = aggregateDefinitions.map((aggregate, index) => {
+		if (!['AVG', 'COUNT', 'COUNT_DISTINCT', 'MAX', 'MIN', 'SUM'].includes(aggregate.function)) {
+			throw new OperationalError(`Unsupported aggregate function "${aggregate.function}".`);
+		}
+		const expression =
+			aggregate.function === 'COUNT'
+				? 'COUNT(*)'
+				: aggregate.function === 'COUNT_DISTINCT'
+					? `COUNT(DISTINCT ${quoteIdentifier(aggregate.column ?? '', 'aggregate column')})`
+					: `${aggregate.function}(${quoteIdentifier(aggregate.column ?? '', 'aggregate column')})`;
+		return `${expression} AS ${quoteIdentifier(aliases[index], 'aggregate alias')}`;
+	});
 	const groupByRaw = context.getNodeParameter('groupBy', itemIndex, '') as string;
-	const groupByColumns = groupByRaw.trim() ? parseIdentifierList(groupByRaw, 'group column') : [];
-	const aggregateColumns = aggregateFunction === 'COUNT' ? [] : [aggregateColumn];
+	const groupByColumns =
+		context.getNode().typeVersion >= 1.3
+			? (context.getNodeParameter('groupByColumns', itemIndex, []) as string[]).map((column) =>
+					assertIdentifier(column, 'group column'),
+				)
+			: groupByRaw.trim()
+				? parseIdentifierList(groupByRaw, 'group column')
+				: [];
 	assertColumnsAllowed([...aggregateColumns, ...groupByColumns], allowedColumns);
 	const where = combineWhereClauses(requiredWhere, userWhere);
 	const groupSelect = groupByColumns.map((column) => quoteIdentifier(column)).join(', ');
 	const groupClause = groupSelect ? ` GROUP BY ${groupSelect}` : '';
 	const selectClause = groupSelect
-		? `${groupSelect}, ${aggregateExpression} AS ${aggregateAlias}`
-		: `${aggregateExpression} AS ${aggregateAlias}`;
+		? `${groupSelect}, ${aggregateExpressions.join(', ')}`
+		: aggregateExpressions.join(', ');
 	const sql = `SELECT ${selectClause} FROM ${tableReference}${where.sql}${groupClause} LIMIT ${limit + 1}`;
 	const queryStartedAt = Date.now();
-	const rows = await session.query(sql, where.parameters);
+	const rows = await session.query(sql, [...sourceParameters, ...where.parameters]);
 	const durationMs = Date.now() - queryStartedAt;
 	const includeMetadata = context.getNodeParameter('includeMetadata', itemIndex, true) as boolean;
 	return addResultMetadata(rows, operation, limit, includeMetadata, {
 		...policyMetadata,
 		durationMs,
+		aggregateCount: aggregateDefinitions.length,
 	});
 }
 
@@ -456,7 +856,7 @@ export class HanaSecure implements INodeType {
 			dark: 'file:logaliHanaGuard-v023.dark.svg',
 		},
 		group: ['input'],
-		version: [1, 1.1, 1.2],
+		version: [1, 1.1, 1.2, 1.3],
 		subtitle: '={{$parameter["resource"] + ": " + $parameter["operation"]}}',
 		description: 'Read SAP HANA data with explicit security guardrails by Logali Group',
 		usableAsTool: {
@@ -476,8 +876,9 @@ export class HanaSecure implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
-					{ name: 'Connection', value: 'connection' },
 					{ name: 'Catalog', value: 'catalog' },
+					{ name: 'Connection', value: 'connection' },
+					{ name: 'Governance', value: 'governance' },
 					{ name: 'Row', value: 'rows' },
 					{ name: 'SQL (Advanced — Workflow Only)', value: 'sql' },
 				],
@@ -496,6 +897,13 @@ export class HanaSecure implements INodeType {
 						action: 'Test the HANA connection',
 						description: 'Connect and return the active user, schema, and database',
 					},
+					{
+						name: 'Get Database Information',
+						value: 'getDatabaseInfo',
+						action: 'Get database information',
+						description:
+							'Return the visible HANA system ID, database, version, usage, and start time',
+					},
 				],
 				default: 'testConnection',
 			},
@@ -507,22 +915,42 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['catalog'] } },
 				options: [
 					{
+						name: 'Describe Table or View',
+						value: 'describeObject',
+						action: 'Describe a table or view',
+						description: 'Return column metadata from the HANA system catalog',
+					},
+					{
+						name: 'Inspect Semantic/CDS Runtime View',
+						value: 'inspectSemanticView',
+						action: 'Inspect a semantic runtime view',
+						description:
+							'Recognize a visible HANA runtime SQL or calculation view without claiming access to ABAP CDS source',
+					},
+					{
+						name: 'List Keys and Constraints',
+						value: 'listConstraints',
+						action: 'List keys and constraints',
+						description: 'Discover governed primary-key and unique-key columns for a table',
+					},
+					{
 						name: 'List Schemas',
 						value: 'listSchemas',
 						action: 'List schemas',
 						description: 'List visible schemas, restricted by the credential allowlist',
 					},
 					{
+						name: 'List Semantic View Parameters',
+						value: 'listSemanticParameters',
+						action: 'List semantic view parameters',
+						description:
+							'Discover positional SQL-view parameters or named calculation-view placeholders',
+					},
+					{
 						name: 'List Tables and Views',
 						value: 'listObjects',
 						action: 'List tables and views',
-						description: 'List tables and views in one allowed schema',
-					},
-					{
-						name: 'Describe Table or View',
-						value: 'describeObject',
-						action: 'Describe a table or view',
-						description: 'Return column metadata from the HANA system catalog',
+						description: 'List tables, views, and virtual tables in one allowed schema',
 					},
 				],
 				default: 'listSchemas',
@@ -532,13 +960,48 @@ export class HanaSecure implements INodeType {
 				name: 'operation',
 				type: 'options',
 				noDataExpression: true,
+				displayOptions: { show: { resource: ['governance'] } },
+				options: [
+					{
+						name: 'Inspect Active Policy',
+						value: 'inspectPolicy',
+						action: 'Inspect the active policy',
+						description:
+							'Return a sanitized summary of the credential guardrails without exposing filter values or secrets',
+					},
+				],
+				default: 'inspectPolicy',
+			},
+			{
+				displayName: 'Operation',
+				name: 'operation',
+				type: 'options',
+				noDataExpression: true,
 				displayOptions: { show: { resource: ['rows'] } },
 				options: [
 					{
-						name: 'Select Rows',
-						value: 'select',
-						action: 'Select rows',
-						description: 'Read rows with validated identifiers and bound filter values',
+						name: 'Aggregate Rows',
+						value: 'aggregate',
+						action: 'Aggregate rows',
+						description: 'Calculate a grouped or ungrouped aggregate',
+					},
+					{
+						name: 'Count Rows',
+						value: 'count',
+						action: 'Count rows',
+						description: 'Count governed rows matching the configured filters',
+					},
+					{
+						name: 'Distinct Values',
+						value: 'distinct',
+						action: 'Get distinct values',
+						description: 'Return unique combinations of selected approved columns',
+					},
+					{
+						name: 'Exists',
+						value: 'exists',
+						action: 'Check whether a row exists',
+						description: 'Return true or false without reading a complete result set',
 					},
 					{
 						name: 'Get One by Key',
@@ -548,10 +1011,16 @@ export class HanaSecure implements INodeType {
 							'Read exactly one row using one or more equality key fields; duplicate matches fail closed',
 					},
 					{
-						name: 'Aggregate Rows',
-						value: 'aggregate',
-						action: 'Aggregate rows',
-						description: 'Calculate a grouped or ungrouped aggregate',
+						name: 'Preview Rows',
+						value: 'preview',
+						action: 'Preview rows',
+						description: 'Return at most five governed rows for safe inspection',
+					},
+					{
+						name: 'Select Rows',
+						value: 'select',
+						action: 'Select rows',
+						description: 'Read rows with validated identifiers and bound filter values',
 					},
 				],
 				default: 'select',
@@ -584,7 +1053,13 @@ export class HanaSecure implements INodeType {
 				displayOptions: {
 					show: {
 						resource: ['catalog'],
-						operation: ['listObjects', 'describeObject'],
+						operation: [
+							'listObjects',
+							'describeObject',
+							'inspectSemanticView',
+							'listSemanticParameters',
+							'listConstraints',
+						],
 					},
 				},
 			},
@@ -627,10 +1102,11 @@ export class HanaSecure implements INodeType {
 				name: 'objectType',
 				type: 'options',
 				options: [
+					{ name: 'Auto Detect', value: 'auto' },
 					{ name: 'Table', value: 'table' },
 					{ name: 'View', value: 'view' },
 				],
-				default: 'table',
+				default: 'auto',
 				displayOptions: {
 					show: { resource: ['catalog'], operation: ['describeObject'] },
 				},
@@ -650,7 +1126,12 @@ export class HanaSecure implements INodeType {
 				displayOptions: {
 					show: {
 						resource: ['catalog'],
-						operation: ['describeObject'],
+						operation: [
+							'describeObject',
+							'inspectSemanticView',
+							'listSemanticParameters',
+							'listConstraints',
+						],
 					},
 				},
 			},
@@ -669,12 +1150,112 @@ export class HanaSecure implements INodeType {
 				displayOptions: { show: { resource: ['rows'] } },
 			},
 			{
+				displayName: 'Runtime View Parameters',
+				name: 'semanticParameterMode',
+				type: 'options',
+				options: [
+					{ name: 'Auto Detect (Recommended)', value: 'auto' },
+					{ name: 'Calculation View Placeholders', value: 'calculationPlaceholders' },
+					{ name: 'No Input Parameters', value: 'none' },
+					{
+						name: 'Positional SQL / Virtual CDS View Parameters',
+						value: 'sqlPositional',
+					},
+				],
+				default: 'auto',
+				description:
+					'How to call a parameterized HANA runtime view. ABAP CDS source and CDS view entities without a SQL or virtual view are not executed directly.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+					},
+				},
+			},
+			{
+				displayName: 'Semantic View Parameters',
+				name: 'semanticParameters',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true },
+				default: {},
+				placeholder: 'Add Input Parameter',
+				description:
+					'Values are bound as prepared-statement parameters. Calculation views also require the placeholder name without dollar signs.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						semanticParameterMode: ['auto', 'calculationPlaceholders', 'sqlPositional'],
+					},
+				},
+				options: [
+					{
+						displayName: 'Values',
+						name: 'values',
+						values: [
+							{
+								displayName: 'Placeholder Name',
+								name: 'name',
+								type: 'string',
+								default: '',
+								placeholder: 'P_COMPANY_CODE',
+								description:
+									'Calculation view placeholder name without the surrounding dollar signs; ignored for positional parameters',
+							},
+							{
+								displayName: 'Value',
+								name: 'value',
+								type: 'string',
+								default: '',
+								required: true,
+							},
+							{
+								displayName: 'Value Type',
+								name: 'valueType',
+								type: 'options',
+								options: [
+									{ name: 'Boolean', value: 'boolean' },
+									{ name: 'Number', value: 'number' },
+									{ name: 'String / Date / Timestamp', value: 'string' },
+								],
+								default: 'string',
+							},
+						],
+					},
+				],
+			},
+			{
 				displayName: 'Columns',
 				name: 'columns',
 				type: 'string',
 				default: '*',
 				description: 'Comma-separated column names, or * for all columns',
-				displayOptions: { show: { resource: ['rows'], operation: ['select', 'getByKey'] } },
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
+						resource: ['rows'],
+						operation: ['select', 'getByKey'],
+					},
+				},
+			},
+			{
+				displayName: 'Selected Column Names or IDs',
+				name: 'selectedColumns',
+				type: 'multiOptions',
+				typeOptions: {
+					loadOptionsMethod: 'getColumns',
+					loadOptionsDependsOn: ['schema', 'objectName'],
+				},
+				default: [],
+				description:
+					'Approved columns to return. Leave empty to return every column allowed by the credential policy. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['select', 'getByKey', 'preview', 'distinct'],
+					},
+				},
 			},
 			{
 				displayName: 'Filter Logic',
@@ -687,7 +1268,12 @@ export class HanaSecure implements INodeType {
 				default: 'AND',
 				description:
 					'How user-defined filters are combined. Credential-required filters are always enforced with AND.',
-				displayOptions: { show: { resource: ['rows'], operation: ['select', 'aggregate'] } },
+				displayOptions: {
+					show: {
+						resource: ['rows'],
+						operation: ['select', 'aggregate', 'exists', 'count', 'preview', 'distinct'],
+					},
+				},
 			},
 			{
 				displayName: 'Filters',
@@ -696,7 +1282,12 @@ export class HanaSecure implements INodeType {
 				typeOptions: { multipleValues: true },
 				default: {},
 				placeholder: 'Add Filter',
-				displayOptions: { show: { resource: ['rows'], operation: ['select', 'aggregate'] } },
+				displayOptions: {
+					show: {
+						resource: ['rows'],
+						operation: ['select', 'aggregate', 'exists', 'count', 'preview', 'distinct'],
+					},
+				},
 				options: [
 					{
 						displayName: 'Values',
@@ -855,7 +1446,104 @@ export class HanaSecure implements INodeType {
 				default: 'none',
 				description:
 					'Start with First Keyset Page, then reuse nextCursor with Continue After Cursor. The cursor column must be unique and monotonic.',
-				displayOptions: { show: { resource: ['rows'], operation: ['select'] } },
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
+						resource: ['rows'],
+						operation: ['select'],
+					},
+				},
+			},
+			{
+				displayName: 'Pagination Mode',
+				name: 'paginationMode',
+				type: 'options',
+				options: [
+					{ name: 'Automatic (Bounded)', value: 'automatic' },
+					{ name: 'Continue From Cursor Token', value: 'keysetContinue' },
+					{ name: 'First Keyset Page', value: 'keysetFirst' },
+					{ name: 'No Pagination', value: 'none' },
+				],
+				default: 'none',
+				description:
+					'Use a stable composite keyset cursor. Automatic mode follows pages only up to the configured row and page caps.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['select'],
+					},
+				},
+			},
+			{
+				displayName: 'Cursor Column Names or IDs',
+				name: 'cursorColumns',
+				type: 'multiOptions',
+				typeOptions: {
+					loadOptionsMethod: 'getColumns',
+					loadOptionsDependsOn: ['schema', 'objectName'],
+				},
+				default: [],
+				required: true,
+				description:
+					'Ordered unique key used for stable pagination, for example CHANGED_AT followed by DOCUMENT_ID. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['automatic', 'keysetFirst', 'keysetContinue'],
+					},
+				},
+			},
+			{
+				displayName: 'Cursor Token',
+				name: 'cursorToken',
+				type: 'string',
+				typeOptions: { password: true },
+				default: '',
+				required: true,
+				description: 'Opaque nextCursor token returned by the previous page',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['keysetContinue'],
+					},
+				},
+			},
+			{
+				displayName: 'Automatic Maximum Rows',
+				name: 'automaticMaxRows',
+				type: 'number',
+				typeOptions: { minValue: 1, maxValue: 10000 },
+				default: 5000,
+				description: 'Hard cap across every automatically fetched page',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['automatic'],
+					},
+				},
+			},
+			{
+				displayName: 'Automatic Maximum Pages',
+				name: 'automaticMaxPages',
+				type: 'number',
+				typeOptions: { minValue: 1, maxValue: 100 },
+				default: 50,
+				description: 'Hard cap on database round trips during automatic pagination',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['select'],
+						paginationMode: ['automatic'],
+					},
+				},
 			},
 			{
 				displayName: 'Cursor Column Name or ID',
@@ -872,9 +1560,10 @@ export class HanaSecure implements INodeType {
 					'Unique, sortable column used to continue after the previous page; include it in Columns. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
 						resource: ['rows'],
 						operation: ['select'],
-						paginationMode: ['keysetFirst', 'keysetContinue'],
+						paginationMode: ['automatic', 'keysetFirst', 'keysetContinue'],
 					},
 				},
 			},
@@ -891,7 +1580,7 @@ export class HanaSecure implements INodeType {
 					show: {
 						resource: ['rows'],
 						operation: ['select'],
-						paginationMode: ['keysetFirst', 'keysetContinue'],
+						paginationMode: ['automatic', 'keysetFirst', 'keysetContinue'],
 					},
 				},
 			},
@@ -907,6 +1596,7 @@ export class HanaSecure implements INodeType {
 				default: 'string',
 				displayOptions: {
 					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
 						resource: ['rows'],
 						operation: ['select'],
 						paginationMode: ['keysetContinue'],
@@ -922,6 +1612,7 @@ export class HanaSecure implements INodeType {
 				description: 'The nextCursor value returned by the previous execution',
 				displayOptions: {
 					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
 						resource: ['rows'],
 						operation: ['select'],
 						paginationMode: ['keysetContinue'],
@@ -981,7 +1672,13 @@ export class HanaSecure implements INodeType {
 					{ name: 'Sum', value: 'SUM' },
 				],
 				default: 'COUNT',
-				displayOptions: { show: { resource: ['rows'], operation: ['aggregate'] } },
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
+						resource: ['rows'],
+						operation: ['aggregate'],
+					},
+				},
 			},
 			{
 				displayName: 'Aggregate Column Name or ID',
@@ -997,6 +1694,7 @@ export class HanaSecure implements INodeType {
 					'Numeric or comparable column to aggregate. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
 						resource: ['rows'],
 						operation: ['aggregate'],
 						aggregateFunction: ['AVG', 'COUNT_DISTINCT', 'MAX', 'MIN', 'SUM'],
@@ -1009,7 +1707,13 @@ export class HanaSecure implements INodeType {
 				type: 'string',
 				default: 'RESULT',
 				required: true,
-				displayOptions: { show: { resource: ['rows'], operation: ['aggregate'] } },
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
+						resource: ['rows'],
+						operation: ['aggregate'],
+					},
+				},
 			},
 			{
 				displayName: 'Group By',
@@ -1018,7 +1722,90 @@ export class HanaSecure implements INodeType {
 				default: '',
 				placeholder: 'COMPANY_CODE,CURRENCY',
 				description: 'Optional comma-separated grouping columns',
-				displayOptions: { show: { resource: ['rows'], operation: ['aggregate'] } },
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { lte: 1.2 } }],
+						resource: ['rows'],
+						operation: ['aggregate'],
+					},
+				},
+			},
+			{
+				displayName: 'Aggregate Calculations',
+				name: 'aggregates',
+				type: 'fixedCollection',
+				typeOptions: { multipleValues: true },
+				default: {},
+				placeholder: 'Add Calculation',
+				description: 'Add up to ten aggregate calculations to the same governed query',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['aggregate'],
+					},
+				},
+				options: [
+					{
+						displayName: 'Values',
+						name: 'values',
+						values: [
+							{
+								displayName: 'Function',
+								name: 'function',
+								type: 'options',
+								options: [
+									{ name: 'Average', value: 'AVG' },
+									{ name: 'Count', value: 'COUNT' },
+									{ name: 'Count Distinct', value: 'COUNT_DISTINCT' },
+									{ name: 'Maximum', value: 'MAX' },
+									{ name: 'Minimum', value: 'MIN' },
+									{ name: 'Sum', value: 'SUM' },
+								],
+								default: 'COUNT',
+							},
+							{
+								displayName: 'Column Name or ID',
+								name: 'column',
+								type: 'options',
+								description:
+									'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+								typeOptions: {
+									loadOptionsMethod: 'getColumns',
+									loadOptionsDependsOn: ['schema', 'objectName'],
+								},
+								default: '',
+								displayOptions: { hide: { function: ['COUNT'] } },
+							},
+							{
+								displayName: 'Result Alias',
+								name: 'alias',
+								type: 'string',
+								default: 'RESULT',
+								required: true,
+							},
+						],
+					},
+				],
+			},
+			{
+				displayName: 'Group By Columns',
+				name: 'groupByColumns',
+				type: 'multiOptions',
+				typeOptions: {
+					loadOptionsMethod: 'getColumns',
+					loadOptionsDependsOn: ['schema', 'objectName'],
+				},
+				default: [],
+				description:
+					'Approved columns used to group the aggregate results. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.3 } }],
+						resource: ['rows'],
+						operation: ['aggregate'],
+					},
+				},
 			},
 			{
 				displayName: 'SQL',
@@ -1057,6 +1844,52 @@ export class HanaSecure implements INodeType {
 				description: 'Whether to add row count, limit, and truncation information',
 				hint: 'Keyset pagination always includes metadata so the next cursor is available.',
 				displayOptions: { show: { resource: ['rows', 'sql'] } },
+			},
+			{
+				displayName: 'Big Integer Output',
+				name: 'bigIntMode',
+				type: 'options',
+				options: [
+					{ name: 'String (Safe)', value: 'string' },
+					{ name: 'Number (Fail If Unsafe)', value: 'number' },
+				],
+				default: 'string',
+				description: 'How native HANA big integers are represented in JSON',
+				displayOptions: { show: { '@version': [{ _cnd: { gte: 1.3 } }] } },
+			},
+			{
+				displayName: 'Date and Timestamp Output',
+				name: 'dateMode',
+				type: 'options',
+				options: [
+					{ name: 'ISO 8601 String', value: 'iso' },
+					{ name: 'Epoch Milliseconds', value: 'epochMilliseconds' },
+				],
+				default: 'iso',
+				description: 'How Date objects returned by the HANA driver are represented',
+				displayOptions: { show: { '@version': [{ _cnd: { gte: 1.3 } }] } },
+			},
+			{
+				displayName: 'Binary Encoding',
+				name: 'binaryEncoding',
+				type: 'options',
+				options: [
+					{ name: 'Base64', value: 'base64' },
+					{ name: 'Hexadecimal', value: 'hex' },
+				],
+				default: 'base64',
+				description: 'How BLOB and binary buffers are represented in JSON output',
+				displayOptions: { show: { '@version': [{ _cnd: { gte: 1.3 } }] } },
+			},
+			{
+				displayName: 'Maximum Result Size (Bytes)',
+				name: 'maxResultBytes',
+				type: 'number',
+				typeOptions: { minValue: 1024, maxValue: 52_428_800 },
+				default: 10_485_760,
+				description:
+					'Hard serialized-size cap for this execution; reduce columns or rows when the result is too large',
+				displayOptions: { show: { '@version': [{ _cnd: { gte: 1.3 } }] } },
 			},
 			{
 				displayName: 'Output Mode',
@@ -1187,94 +2020,174 @@ export class HanaSecure implements INodeType {
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const inputItems = this.getInputData();
 		const outputItems: INodeExecutionData[] = [];
+		if (inputItems.length === 0) return [outputItems];
+		const credentials = (await this.getCredentials(
+			'hanaSecureApi',
+			0,
+		)) as unknown as HanaCredentials;
+		validateGovernanceConfiguration(credentials);
 
-		for (let itemIndex = 0; itemIndex < inputItems.length; itemIndex += 1) {
-			try {
-				const resource = this.getNodeParameter('resource', itemIndex) as string;
-				const operation = this.getNodeParameter('operation', itemIndex) as string;
-				const credentials = (await this.getCredentials(
-					'hanaSecureApi',
-					itemIndex,
-				)) as unknown as HanaCredentials;
-				validateGovernanceConfiguration(credentials);
-				const aiToolPolicy = resolveAiToolPolicy(
-					this.getNode().type,
-					this.getNode().typeVersion,
-					resource,
-					operation,
-					credentials,
-				);
+		await withHanaClient(credentials, async (session) => {
+			for (let itemIndex = 0; itemIndex < inputItems.length; itemIndex += 1) {
+				try {
+					const resource = this.getNodeParameter('resource', itemIndex) as string;
+					const operation = this.getNodeParameter('operation', itemIndex) as string;
+					const aiToolPolicy = resolveAiToolPolicy(
+						this.getNode().type,
+						this.getNode().typeVersion,
+						resource,
+						operation,
+						credentials,
+					);
 
-				const result = await withHanaClient(credentials, async (session) => {
-					if (resource === 'connection') {
-						const rows = await session.query(
-							'SELECT CURRENT_USER AS "USER_NAME", CURRENT_SCHEMA AS "SCHEMA_NAME", (SELECT TOP 1 DATABASE_NAME FROM SYS.M_DATABASE) AS "DATABASE_NAME" FROM DUMMY',
-						);
-						return rows.map((row) => ({
-							...row,
-							CONNECTED: true,
-							TLS_ENABLED: credentials.useTLS,
-						}));
+					const result: Record<string, unknown>[] = await (async () => {
+						if (resource === 'connection') {
+							if (operation === 'getDatabaseInfo') {
+								const rows = await session.query(
+									'SELECT "SYSTEM_ID", "DATABASE_NAME", "VERSION", "USAGE", "START_TIME" FROM "SYS"."M_DATABASE"',
+								);
+								return rows.map((row) => ({
+									...row,
+									TLS_ENABLED: credentials.useTLS,
+								}));
+							}
+							const rows = await session.query(
+								'SELECT CURRENT_USER AS "USER_NAME", CURRENT_SCHEMA AS "SCHEMA_NAME", (SELECT TOP 1 DATABASE_NAME FROM SYS.M_DATABASE) AS "DATABASE_NAME" FROM DUMMY',
+							);
+							return rows.map((row) => ({
+								...row,
+								CONNECTED: true,
+								TLS_ENABLED: credentials.useTLS,
+							}));
+						}
+						if (resource === 'catalog') {
+							return await executeCatalogOperation(
+								this,
+								session,
+								itemIndex,
+								operation,
+								credentials,
+								aiToolPolicy.maxRows,
+							);
+						}
+						if (resource === 'governance') {
+							const schemas = parseAllowedSchemas(credentials.allowedSchemas);
+							const objects = [...parseAllowedObjects(credentials.allowedObjects)].sort();
+							const columnPolicies = parseColumnPolicies(credentials.columnPoliciesJson);
+							const requiredPolicies = parseRequiredFilterPolicies(credentials.requiredFiltersJson);
+							return [
+								{
+									POLICY_VALID: true,
+									ALLOWED_SCHEMAS: schemas,
+									ALLOWED_OBJECTS: objects,
+									COLUMN_POLICIES: Object.fromEntries(
+										[...columnPolicies.entries()].map(([reference, columns]) => [
+											reference,
+											columns,
+										]),
+									),
+									REQUIRED_FILTERS: Object.fromEntries(
+										[...requiredPolicies.entries()].map(([reference, filters]) => [
+											reference,
+											filters.map((filter) => ({
+												column: filter.column,
+												operator: filter.operator,
+												valueRedacted: true,
+											})),
+										]),
+									),
+									ADVANCED_SQL_ENABLED: credentials.allowAdvancedSql === true,
+									AI_TOOL_ENABLED: credentials.allowAiTool === true,
+									AI_CATALOG_DISCOVERY_ENABLED: credentials.allowAiCatalogDiscovery === true,
+									AI_MAX_ROWS: credentials.aiToolMaxRows ?? 100,
+									AI_MAX_BYTES: credentials.aiToolMaxBytes ?? 262_144,
+								},
+							];
+						}
+						if (resource === 'rows') {
+							return await executeRowsOperation(
+								this,
+								session,
+								itemIndex,
+								operation,
+								credentials,
+								aiToolPolicy.maxRows,
+							);
+						}
+						return await executeAdvancedSql(this, session, itemIndex, credentials);
+					})();
+					if (this.getNode().typeVersion >= 1.3 && result.length > 0) {
+						const existingMetadata =
+							result[0]._hana && typeof result[0]._hana === 'object'
+								? (result[0]._hana as Record<string, unknown>)
+								: {};
+						result[0] = {
+							...result[0],
+							_hana: {
+								...existingMetadata,
+								...session.diagnostics(),
+								connectionScope: 'execution',
+								inputItemCount: inputItems.length,
+							},
+						};
 					}
-					if (resource === 'catalog') {
-						return await executeCatalogOperation(
-							this,
-							session,
+
+					const jsonResult = rowsToJson(
+						result,
+						this.getNode().typeVersion >= 1.3
+							? {
+									bigIntMode: this.getNodeParameter('bigIntMode', itemIndex, 'string') as
+										| 'string'
+										| 'number',
+									binaryEncoding: this.getNodeParameter('binaryEncoding', itemIndex, 'base64') as
+										| 'base64'
+										| 'hex',
+									dateMode: this.getNodeParameter('dateMode', itemIndex, 'iso') as
+										| 'iso'
+										| 'epochMilliseconds',
+								}
+							: {},
+					);
+					if (this.getNode().typeVersion >= 1.3) {
+						enforceJsonByteLimit(
+							jsonResult,
+							this.getNodeParameter('maxResultBytes', itemIndex, 10_485_760) as number,
+						);
+					}
+					enforceAiToolByteLimit(jsonResult, aiToolPolicy.maxBytes);
+					const outputMode =
+						this.getNode().typeVersion >= 1.2
+							? (this.getNodeParameter('outputMode', itemIndex, 'eachRow') as HanaOutputMode)
+							: 'eachRow';
+					const resultField =
+						outputMode === 'eachRow'
+							? 'hanaRows'
+							: (this.getNodeParameter('resultField', itemIndex, 'hanaRows') as string);
+					outputItems.push(
+						...formatHanaOutput(
+							inputItems[itemIndex],
+							jsonResult,
 							itemIndex,
-							operation,
-							credentials,
-							aiToolPolicy.maxRows,
-						);
+							outputMode,
+							resultField,
+						),
+					);
+				} catch (error) {
+					if (this.continueOnFail()) {
+						outputItems.push({
+							json: hanaErrorOutput(error) as INodeExecutionData['json'],
+							pairedItem: { item: itemIndex },
+						});
+						continue;
 					}
-					if (resource === 'rows') {
-						return await executeRowsOperation(
-							this,
-							session,
-							itemIndex,
-							operation,
-							credentials,
-							aiToolPolicy.maxRows,
-						);
-					}
-					return await executeAdvancedSql(this, session, itemIndex, credentials);
-				});
-
-				const jsonResult = rowsToJson(result);
-				enforceAiToolByteLimit(jsonResult, aiToolPolicy.maxBytes);
-				const outputMode =
-					this.getNode().typeVersion >= 1.2
-						? (this.getNodeParameter('outputMode', itemIndex, 'eachRow') as HanaOutputMode)
-						: 'eachRow';
-				const resultField =
-					outputMode === 'eachRow'
-						? 'hanaRows'
-						: (this.getNodeParameter('resultField', itemIndex, 'hanaRows') as string);
-				outputItems.push(
-					...formatHanaOutput(
-						inputItems[itemIndex],
-						jsonResult,
-						itemIndex,
-						outputMode,
-						resultField,
-					),
-				);
-			} catch (error) {
-				if (this.continueOnFail()) {
-					outputItems.push({
-						json: {
-							error: error instanceof Error ? error.message : String(error),
-						},
-						pairedItem: { item: itemIndex },
-					});
-					continue;
+					throw new NodeOperationError(
+						this.getNode(),
+						error instanceof Error ? error : new Error(String(error)),
+						{ itemIndex },
+					);
 				}
-				throw new NodeOperationError(
-					this.getNode(),
-					error instanceof Error ? error : new Error(String(error)),
-					{ itemIndex },
-				);
 			}
-		}
+		});
 
 		return [outputItems];
 	}

@@ -3,7 +3,12 @@ import { describe, it } from 'node:test';
 
 import type { Client } from 'hdb';
 
-import { closeClient, connectClient, createClientOptions } from '../nodes/HanaSecure/hanaClient';
+import {
+	closeClient,
+	connectClient,
+	createClientOptions,
+	queryFingerprint,
+} from '../nodes/HanaSecure/hanaClient';
 import type { HanaCredentials } from '../nodes/HanaSecure/types';
 
 const credentials: HanaCredentials = {
@@ -21,6 +26,16 @@ const credentials: HanaCredentials = {
 };
 
 describe('HANA client connection options', () => {
+	it('fingerprints SQL structure without requiring query values', () => {
+		assert.equal(
+			queryFingerprint('SELECT  *\nFROM "TRAINING"."ITEMS"'),
+			queryFingerprint('SELECT * FROM "TRAINING"."ITEMS"'),
+		);
+		assert.notEqual(
+			queryFingerprint('SELECT * FROM "TRAINING"."ITEMS"'),
+			queryFingerprint('SELECT * FROM "TRAINING"."OTHER"'),
+		);
+	});
 	it('ignores server topology by default for NAT and forwarded endpoints', () => {
 		const options = createClientOptions(credentials);
 		assert.equal(options.ignoreTopology, true);

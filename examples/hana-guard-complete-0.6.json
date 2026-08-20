@@ -1,0 +1,126 @@
+{
+	"name": "Logali HANA Guard 0.6 - Semantic and paginated reads",
+	"nodes": [
+		{
+			"parameters": {},
+			"id": "manual-trigger",
+			"name": "Run demo",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [0, 80]
+		},
+		{
+			"parameters": {
+				"resource": "catalog",
+				"operation": "inspectSemanticView",
+				"schema": "TRAINING",
+				"objectName": "ZC_GLITEM"
+			},
+			"id": "inspect-runtime-view",
+			"name": "Inspect semantic runtime view",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.3,
+			"position": [300, -140]
+		},
+		{
+			"parameters": {
+				"resource": "catalog",
+				"operation": "listSemanticParameters",
+				"schema": "TRAINING",
+				"objectName": "ZC_GLITEM"
+			},
+			"id": "list-runtime-parameters",
+			"name": "List runtime parameters",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.3,
+			"position": [300, 80]
+		},
+		{
+			"parameters": {
+				"resource": "rows",
+				"operation": "select",
+				"schema": "TRAINING",
+				"objectName": "ZC_GLITEM",
+				"semanticParameterMode": "sqlPositional",
+				"semanticParameters": {
+					"values": [
+						{
+							"name": "",
+							"value": "1010",
+							"valueType": "string"
+						}
+					]
+				},
+				"selectedColumns": ["COMPANY_CODE", "DOCUMENT_ID", "CHANGED_AT", "AMOUNT", "CURRENCY"],
+				"filterLogic": "AND",
+				"filters": {
+					"values": [
+						{
+							"column": "STATUS",
+							"operator": "eq",
+							"value": "OPEN",
+							"valueType": "string"
+						}
+					]
+				},
+				"paginationMode": "automatic",
+				"cursorColumns": ["CHANGED_AT", "DOCUMENT_ID"],
+				"automaticMaxRows": 100,
+				"automaticMaxPages": 10,
+				"cursorDirection": "ASC",
+				"orderBy": { "values": [] },
+				"limit": 25,
+				"includeMetadata": true,
+				"bigIntMode": "string",
+				"dateMode": "iso",
+				"binaryEncoding": "base64",
+				"maxResultBytes": 1048576,
+				"outputMode": "eachRow"
+			},
+			"id": "read-semantic-view",
+			"name": "Read runtime view with bounded pagination",
+			"type": "n8n-nodes-hana-secure.hanaSecure",
+			"typeVersion": 1.3,
+			"position": [300, 300]
+		},
+		{
+			"parameters": {
+				"content": "Attach your own least-privilege Logali HANA Guard credential. Replace TRAINING.ZC_GLITEM and its fields with an approved SQL runtime view, calculation view, or virtual table. This workflow contains no credential, host, user, token, or internal identifier.",
+				"height": 210,
+				"width": 620
+			},
+			"id": "setup-note",
+			"name": "Safe demo setup",
+			"type": "n8n-nodes-base.stickyNote",
+			"typeVersion": 1,
+			"position": [-20, -310]
+		}
+	],
+	"connections": {
+		"Run demo": {
+			"main": [
+				[
+					{
+						"node": "Inspect semantic runtime view",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "List runtime parameters",
+						"type": "main",
+						"index": 0
+					},
+					{
+						"node": "Read runtime view with bounded pagination",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	},
+	"pinData": {},
+	"settings": { "executionOrder": "v1" },
+	"active": false,
+	"tags": []
+}
