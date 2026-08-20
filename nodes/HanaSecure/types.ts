@@ -9,9 +9,14 @@ export interface HanaCredentials {
 	rejectUnauthorized: boolean;
 	ca?: string;
 	allowedSchemas?: string;
+	allowedObjects?: string;
+	columnPoliciesJson?: string;
+	requiredFiltersJson?: string;
 	allowAdvancedSql: boolean;
 	allowAiTool?: boolean;
+	allowAiCatalogDiscovery?: boolean;
 	aiToolMaxRows?: number;
+	aiToolMaxBytes?: number;
 	connectionTimeout: number;
 	queryTimeout: number;
 }
@@ -24,6 +29,13 @@ export type FilterOperator =
 	| 'lt'
 	| 'le'
 	| 'like'
+	| 'notLike'
+	| 'contains'
+	| 'startsWith'
+	| 'endsWith'
+	| 'in'
+	| 'notIn'
+	| 'between'
 	| 'isNull'
 	| 'isNotNull';
 
@@ -31,6 +43,15 @@ export interface Filter {
 	column: string;
 	operator: FilterOperator;
 	value?: unknown;
+}
+
+export type FilterLogic = 'AND' | 'OR';
+
+export type FilterValueType = 'string' | 'number' | 'boolean' | 'null' | 'json';
+
+export interface UiFilter extends Filter {
+	valueType?: FilterValueType;
+	valuesJson?: string;
 }
 
 export interface OrderBy {

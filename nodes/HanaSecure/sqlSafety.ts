@@ -1,6 +1,6 @@
 import { OperationalError } from 'n8n-workflow';
 
-import type { Filter, OrderBy } from './types';
+import type { Filter, FilterLogic, FilterValueType, OrderBy, UiFilter } from './types';
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$#]*$/;
 const FORBIDDEN_SQL_KEYWORDS = [
@@ -78,7 +78,32 @@ export function assertSchemaAllowed(schema: string, allowlist: string[]): string
 	return checkedSchema;
 }
 
-export function buildWhereClause(filters: Filter[]): {
+const MAX_FILTER_LIST_VALUES = 100;
+
+function escapeLikeLiteral(value: unknown): string {
+	return String(value ?? '').replace(/[\\%_]/g, '\\$&');
+}
+
+function listValue(filter: Filter): unknown[] {
+	if (!Array.isArray(filter.value)) {
+		throw new Error(`Filter operator ${filter.operator} requires an array value.`);
+	}
+	if (filter.operator === 'between' && filter.value.length !== 2) {
+		throw new Error('Between requires exactly two values.');
+	}
+	if (filter.operator !== 'between' && filter.value.length === 0) {
+		throw new Error(`${filter.operator} requires at least one value.`);
+	}
+	if (filter.value.length > MAX_FILTER_LIST_VALUES) {
+		throw new Error(`A filter may contain at most ${MAX_FILTER_LIST_VALUES} values.`);
+	}
+	return filter.value;
+}
+
+export function buildWhereClause(
+	filters: Filter[],
+	logic: FilterLogic = 'AND',
+): {
 	sql: string;
 	parameters: unknown[];
 } {
@@ -109,6 +134,33 @@ export function buildWhereClause(filters: Filter[]): {
 			case 'like':
 				parameters.push(filter.value);
 				return `${column} LIKE ?`;
+			case 'notLike':
+				parameters.push(filter.value);
+				return `${column} NOT LIKE ?`;
+			case 'contains':
+				parameters.push(`%${escapeLikeLiteral(filter.value)}%`);
+				return `${column} LIKE ? ESCAPE '\\'`;
+			case 'startsWith':
+				parameters.push(`${escapeLikeLiteral(filter.value)}%`);
+				return `${column} LIKE ? ESCAPE '\\'`;
+			case 'endsWith':
+				parameters.push(`%${escapeLikeLiteral(filter.value)}`);
+				return `${column} LIKE ? ESCAPE '\\'`;
+			case 'in': {
+				const values = listValue(filter);
+				parameters.push(...values);
+				return `${column} IN (${values.map(() => '?').join(', ')})`;
+			}
+			case 'notIn': {
+				const values = listValue(filter);
+				parameters.push(...values);
+				return `${column} NOT IN (${values.map(() => '?').join(', ')})`;
+			}
+			case 'between': {
+				const values = listValue(filter);
+				parameters.push(...values);
+				return `${column} BETWEEN ? AND ?`;
+			}
 			case 'isNull':
 				return `${column} IS NULL`;
 			case 'isNotNull':
@@ -118,7 +170,84 @@ export function buildWhereClause(filters: Filter[]): {
 		}
 	});
 
-	return { sql: ` WHERE ${predicates.join(' AND ')}`, parameters };
+	const checkedLogic = logic === 'OR' ? 'OR' : 'AND';
+	return { sql: ` WHERE ${predicates.join(` ${checkedLogic} `)}`, parameters };
+}
+
+export function combineWhereClauses(...clauses: Array<{ sql: string; parameters: unknown[] }>): {
+	sql: string;
+	parameters: unknown[];
+} {
+	const populated = clauses.filter((clause) => clause.sql);
+	if (populated.length === 0) return { sql: '', parameters: [] };
+	return {
+		sql: ` WHERE ${populated.map((clause) => `(${clause.sql.replace(/^ WHERE /, '')})`).join(' AND ')}`,
+		parameters: populated.flatMap((clause) => clause.parameters),
+	};
+}
+
+function typedValue(value: unknown, valueType: FilterValueType): unknown {
+	if (valueType === 'string') return String(value ?? '');
+	if (valueType === 'number') {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed))
+			throw new Error(`Filter value "${String(value)}" is not a number.`);
+		return parsed;
+	}
+	if (valueType === 'boolean') {
+		if (value === true || value === 'true') return true;
+		if (value === false || value === 'false') return false;
+		throw new Error('Boolean filter values must be true or false.');
+	}
+	if (valueType === 'null') return null;
+	return value;
+}
+
+export function normalizeUiFilters(filters: UiFilter[]): Filter[] {
+	return filters.map((filter) => {
+		if (filter.operator === 'isNull' || filter.operator === 'isNotNull') {
+			return { column: filter.column, operator: filter.operator };
+		}
+		const valueType = filter.valueType ?? 'string';
+		if (valueType === 'null') {
+			if (filter.operator === 'eq') return { column: filter.column, operator: 'isNull' };
+			if (filter.operator === 'ne') return { column: filter.column, operator: 'isNotNull' };
+			throw new Error('Null values may be used only with Equals or Not Equals.');
+		}
+		if (filter.operator === 'in' || filter.operator === 'notIn' || filter.operator === 'between') {
+			let parsed: unknown;
+			let parseFailed = false;
+			try {
+				parsed = JSON.parse(filter.valuesJson || '[]');
+			} catch {
+				parseFailed = true;
+			}
+			if (parseFailed) throw new Error(`${filter.operator} values must be a valid JSON array.`);
+			if (!Array.isArray(parsed))
+				throw new Error(`${filter.operator} values must be a JSON array.`);
+			return {
+				column: filter.column,
+				operator: filter.operator,
+				value: parsed.map((value) =>
+					typedValue(value, valueType === 'json' ? 'string' : valueType),
+				),
+			};
+		}
+		if (valueType === 'json') {
+			throw new Error('JSON value type is available only for IN, NOT IN, and BETWEEN.');
+		}
+		return {
+			column: filter.column,
+			operator: filter.operator,
+			value: typedValue(filter.value, valueType),
+		};
+	});
+}
+
+export function parseTypedValue(value: unknown, valueType: FilterValueType): unknown {
+	if (valueType === 'json') throw new Error('A cursor value cannot use the JSON value type.');
+	if (valueType === 'null') throw new Error('A cursor value cannot be null.');
+	return typedValue(value, valueType);
 }
 
 export function buildOrderByClause(orderBy: OrderBy[]): string {

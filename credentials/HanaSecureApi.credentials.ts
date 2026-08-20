@@ -94,12 +94,42 @@ export class HanaSecureApi implements ICredentialType {
 				'Comma-separated schema allowlist. Leave empty to rely only on database permissions.',
 		},
 		{
+			displayName: 'Allowed Objects',
+			name: 'allowedObjects',
+			type: 'string',
+			typeOptions: { rows: 4 },
+			default: '',
+			placeholder: 'TRAINING.GL_ITEMS,\nREPORTING.OPEN_ORDERS',
+			description:
+				'Optional comma- or line-separated SCHEMA.OBJECT allowlist applied to catalog, describe, select, and aggregate operations',
+		},
+		{
+			displayName: 'Column Policies JSON',
+			name: 'columnPoliciesJson',
+			type: 'string',
+			typeOptions: { rows: 6 },
+			default: '',
+			placeholder: '{"TRAINING.GL_ITEMS":["COMPANY_CODE","AMOUNT","CURRENCY"]}',
+			description:
+				'Optional object-to-columns map. Selecting * expands only to approved columns; filters, sorting, grouping, and cursors are checked too.',
+		},
+		{
+			displayName: 'Required Filters JSON',
+			name: 'requiredFiltersJson',
+			type: 'string',
+			typeOptions: { rows: 7 },
+			default: '',
+			placeholder: '{"TRAINING.GL_ITEMS":[{"column":"MANDT","operator":"eq","value":"250"}]}',
+			description:
+				'Optional filters that credentials always add with AND to structured row reads, including AI Tool calls',
+		},
+		{
 			displayName: 'Allow Advanced Read-Only SQL',
 			name: 'allowAdvancedSql',
 			type: 'boolean',
 			default: false,
 			description:
-				'Whether workflows using these credentials may execute manually written SELECT statements',
+				'Whether trusted workflows may execute manually written SELECT statements. In node v1.1+, advanced SQL is blocked when any structured governance policy is configured.',
 		},
 		{
 			displayName: 'Allow AI Tool Use',
@@ -110,6 +140,15 @@ export class HanaSecureApi implements ICredentialType {
 				'Whether this credential may be used by the Logali HANA Guard Tool variant. Advanced SQL remains blocked for tools.',
 		},
 		{
+			displayName: 'Allow AI Catalog Discovery',
+			name: 'allowAiCatalogDiscovery',
+			type: 'boolean',
+			default: false,
+			description:
+				'Whether the AI Tool may list schemas, list objects, and describe approved objects. Keep disabled when the agent already knows its target.',
+			displayOptions: { show: { allowAiTool: [true] } },
+		},
+		{
 			displayName: 'AI Tool Row Limit',
 			name: 'aiToolMaxRows',
 			type: 'number',
@@ -117,6 +156,16 @@ export class HanaSecureApi implements ICredentialType {
 			default: 100,
 			description:
 				'Credential-level maximum number of rows returned by one AI tool call, even when the node requests a higher limit',
+			displayOptions: { show: { allowAiTool: [true] } },
+		},
+		{
+			displayName: 'AI Tool Result Size Limit (Bytes)',
+			name: 'aiToolMaxBytes',
+			type: 'number',
+			typeOptions: { minValue: 1024, maxValue: 5242880 },
+			default: 262144,
+			description:
+				'Maximum serialized result size for one AI Tool call; oversized results fail instead of flooding the agent context',
 			displayOptions: { show: { allowAiTool: [true] } },
 		},
 		{
