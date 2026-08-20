@@ -17,9 +17,9 @@
 #
 # ─── TAG CONVENTION ────────────────────────────────────────────────────────────
 #
-# This workflow triggers on tags matching "*.*.*" (e.g. 0.2.0).
-# If you prefer tags with a "v" prefix (e.g. v0.2.0), change the filter to:
-#   tags: ['v*.*.*']
+# This workflow uses GitHub release tags with a "v" prefix (for example v0.4.0).
+# The verification step removes only that leading prefix before comparing the tag
+# with package.json.
 #
 # ─── RELEASE PROCESS ───────────────────────────────────────────────────────────
 #
@@ -31,9 +31,8 @@ name: Publish
 on:
   push:
     tags:
-      # Matches 0.1.0, 1.2.3, 2.0.0-rc.1, etc.
-      # See "TAG CONVENTION" above if you prefer tags with a "v" prefix.
-      - '*.*.*'
+      # Matches v0.1.0, v1.2.3, v2.0.0-rc.1, etc.
+      - 'v*.*.*'
 
 jobs:
   publish:
@@ -64,7 +63,7 @@ jobs:
 
       - name: Verify tag matches package version
         run: |
-          test "${GITHUB_REF_NAME}" = "$(node -p 'require("./package.json").version')"
+          test "${GITHUB_REF_NAME#v}" = "$(node -p 'require("./package.json").version')"
 
       - name: Test
         run: npm test
