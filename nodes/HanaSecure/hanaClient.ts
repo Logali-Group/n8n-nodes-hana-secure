@@ -79,7 +79,17 @@ export function closeClient(client: Client): void {
 	}
 }
 
+export function normalizeSapClient(value?: string): string | undefined {
+	const client = value?.trim();
+	if (!client) return undefined;
+	if (!/^\d{3}$/.test(client)) {
+		throw new Error('SAP Client must contain exactly three digits, for example 250.');
+	}
+	return client;
+}
+
 export function createClientOptions(credentials: HanaCredentials): ClientOptions {
+	const sapClient = normalizeSapClient(credentials.sapClient);
 	const options: ClientOptions = {
 		host: credentials.host,
 		port: Number(credentials.port),
@@ -93,6 +103,12 @@ export function createClientOptions(credentials: HanaCredentials): ClientOptions
 		initializationTimeout: Number(credentials.connectionTimeout),
 		fetchSize: 256,
 		'SESSIONVARIABLE:APPLICATION': 'n8n-hana-secure',
+		...(sapClient
+			? {
+					'SESSIONVARIABLE:CLIENT': sapClient,
+					'SESSIONVARIABLE:CDS_CLIENT': sapClient,
+				}
+			: {}),
 	};
 	if (credentials.databaseName?.trim()) options.databaseName = credentials.databaseName.trim();
 	if (credentials.useTLS && credentials.ca?.trim()) options.ca = [credentials.ca.trim()];

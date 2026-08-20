@@ -171,6 +171,7 @@ Create a **Logali HANA Guard API** credential with:
 | Host                         | HANA SQL endpoint hostname or IP address                                                         |
 | SQL Port                     | Tenant SQL endpoint port; SAP HANA Cloud normally uses TCP 443                                    |
 | Database Name                | Optional tenant database name; leave empty when the endpoint already targets the tenant SQL port |
+| SAP Client                   | Optional three-digit ABAP client; sets both `CLIENT` and `CDS_CLIENT` for client-dependent CDS    |
 | Ignore Server Topology       | Keeps NAT, forwarded, proxy, and managed endpoints on the configured host; enabled by default    |
 | Username / Password          | Dedicated technical user; never use a broad administrator                                        |
 | Use TLS                      | Encrypts the connection; enabled by default                                                      |
@@ -311,10 +312,14 @@ Live HANA catalog discovery then identified `SAPHANADB.ZN8NCOUNTRYP` as a valid 
 one input parameter.
 
 To consume it through Logali HANA Guard, choose **Row Source → Table Function / Parameterized ABAP
-CDS**, select `ZN8NCOUNTRYP`, and bind `P_COUNTRY = DE`. Direct HANA access still requires a
+CDS**, select `ZN8NCOUNTRYP`, bind `P_COUNTRY = DE`, and set **SAP Client** to the practice client
+(`250` in this example). The credential configures both HANA session variables required by
+client-dependent ABAP CDS runtimes. Direct HANA access still requires a
 separately reviewed SQL endpoint and database grant to the generated runtime function; ABAP
 authorization and ADT access do not create that HANA grant. The live least-privilege account
-correctly reached this database privilege boundary until that explicit grant is reviewed.
+correctly reached this database privilege boundary until that explicit grant was reviewed. The SAP
+client is execution context, not an authorization boundary, so database grants and governance
+policies remain mandatory.
 
 User filters support `AND` or `OR`, equality and comparison operators, `LIKE`/`NOT LIKE`, literal
 contains/starts-with/ends-with matching, `IN`/`NOT IN` lists, `BETWEEN`, and null checks. Values

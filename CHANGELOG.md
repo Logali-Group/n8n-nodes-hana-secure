@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-08-20
+
+### Added
+
+- Add an optional three-digit **SAP Client** credential field for client-dependent ABAP CDS
+  runtimes.
+- Set both HANA `CLIENT` and `CDS_CLIENT` session variables on every connection when the field is
+  configured, while leaving existing credentials unchanged when it is empty.
+- Validate the client before opening a database connection and document that session context does
+  not replace database grants or credential governance policies.
+
 ## [0.7.1] - 2026-08-20
 
 ### Fixed
