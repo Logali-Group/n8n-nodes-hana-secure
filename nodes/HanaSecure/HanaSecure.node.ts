@@ -21,6 +21,7 @@ import {
 	loadTableFunctionColumnOptions,
 	loadTableFunctionOptions,
 	loadTableFunctionParameterOptions,
+	schemaForEditor,
 } from './catalogOptions';
 import { hanaErrorOutput } from './errors';
 import { withHanaClient, type HanaSession } from './hanaClient';
@@ -35,6 +36,7 @@ import {
 	parseColumnPolicies,
 	parseRequiredFilterPolicies,
 	requiredFiltersForObject,
+	resolveSchemaName,
 	validateGovernanceConfiguration,
 } from './governance';
 import { enforceJsonByteLimit, rowsToJson } from './json';
@@ -60,7 +62,6 @@ import {
 } from './tableFunctions';
 import {
 	assertIdentifier,
-	assertSchemaAllowed,
 	buildOrderByClause,
 	buildWhereClause,
 	combineWhereClauses,
@@ -194,9 +195,9 @@ export async function executeCatalogOperation(
 			: addResultMetadata(visibleRows, operation, aiToolMaxRows, true);
 	}
 
-	const schema = assertSchemaAllowed(
-		context.getNodeParameter('schema', itemIndex) as string,
-		allowlist,
+	const schema = resolveSchemaName(
+		context.getNodeParameter('schema', itemIndex, '') as string,
+		credentials,
 	);
 	if (operation === 'listObjects') {
 		const prefix = context.getNodeParameter('objectNamePrefix', itemIndex, '') as string;
@@ -419,7 +420,7 @@ WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?`,
 			);
 			if (virtualObjectRows.length > 0) {
 				const virtualRows = await session.query(
-				`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "LENGTH", "SCALE", "POSITION", "HAS_DEFAULT_VALUE", "IS_MANDATORY", "DEFAULT_VALUE"
+					`SELECT "PARAMETER_NAME", "DATA_TYPE_NAME", "LENGTH", "SCALE", "POSITION", "HAS_DEFAULT_VALUE", "IS_MANDATORY", "DEFAULT_VALUE"
 FROM "SYS"."VIRTUAL_TABLE_PARAMETERS"
 WHERE "SCHEMA_NAME" = ? AND "OBJECT_NAME" = ?
 ORDER BY "POSITION"`,
@@ -555,13 +556,12 @@ async function executeRowsOperation(
 	credentials: HanaCredentials,
 	aiToolMaxRows?: number,
 ): Promise<Record<string, unknown>[]> {
-	const allowlist = parseAllowedSchemas(credentials.allowedSchemas);
 	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
 	const columnPolicies = parseColumnPolicies(credentials.columnPoliciesJson);
 	const requiredFilterPolicies = parseRequiredFilterPolicies(credentials.requiredFiltersJson);
-	const schema = assertSchemaAllowed(
-		context.getNodeParameter('schema', itemIndex) as string,
-		allowlist,
+	const schema = resolveSchemaName(
+		context.getNodeParameter('schema', itemIndex, '') as string,
+		credentials,
 	);
 	const sourceKind =
 		context.getNode().typeVersion >= 1.4
@@ -658,9 +658,7 @@ async function executeRowsOperation(
 		source: `${schema}.${objectName}`,
 		sourceKind,
 		semanticParameterMode,
-		...(sourceKind === 'tableFunction'
-			? { functionUsageType: 'TABLE', functionSecurity }
-			: {}),
+		...(sourceKind === 'tableFunction' ? { functionUsageType: 'TABLE', functionSecurity } : {}),
 		objectAllowlistApplied: allowedObjects.size > 0,
 		columnPolicyApplied: allowedColumns !== undefined,
 		requiredFilterCount: requiredFilters.length,
@@ -1266,9 +1264,8 @@ export class HanaSecure implements INodeType {
 				type: 'options',
 				typeOptions: { loadOptionsMethod: 'getSchemas' },
 				default: '',
-				required: true,
 				description:
-					'Schema containing the table or view. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+					'Schema containing the object. Leave empty to use Default Schema from the credential. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: {
 						resource: ['catalog'],
@@ -1313,9 +1310,8 @@ export class HanaSecure implements INodeType {
 				type: 'options',
 				typeOptions: { loadOptionsMethod: 'getSchemas' },
 				default: '',
-				required: true,
 				description:
-					'Schema containing the table or view. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+					'Schema containing the row source. Leave empty to use Default Schema from the credential. Options are filtered by the credential governance policy. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: { show: { resource: ['rows'] } },
 			},
 			{
@@ -1395,7 +1391,8 @@ export class HanaSecure implements INodeType {
 				},
 				default: '',
 				required: true,
-				description: 'Approved valid HANA table function or generated runtime function for a parameterized ABAP CDS. Custom Y/Z names are prioritized. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				description:
+					'Approved valid HANA table function or generated runtime function for a parameterized ABAP CDS. Custom Y/Z names are prioritized. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 				displayOptions: {
 					show: { resource: ['catalog'], operation: ['describeTableFunction'] },
 				},
@@ -1542,7 +1539,8 @@ export class HanaSecure implements INodeType {
 								},
 								default: '',
 								required: true,
-								description: 'Catalog-declared scalar input parameter. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+								description:
+									'Catalog-declared scalar input parameter. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 							},
 							{
 								displayName: 'Value',
@@ -2294,11 +2292,14 @@ export class HanaSecure implements INodeType {
 				}
 			},
 			async getObjects(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
-				if (!schema) return [];
 				try {
 					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
 					validateGovernanceConfiguration(credentials);
+					const schema = schemaForEditor(
+						String(this.getCurrentNodeParameter('schema') ?? ''),
+						credentials,
+					);
+					if (!schema) return [];
 					return await withHanaClient(
 						credentials,
 						async (session) => await loadObjectOptions(session, credentials, schema),
@@ -2311,11 +2312,14 @@ export class HanaSecure implements INodeType {
 				}
 			},
 			async getTableFunctions(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
-				if (!schema) return [];
 				try {
 					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
 					validateGovernanceConfiguration(credentials);
+					const schema = schemaForEditor(
+						String(this.getCurrentNodeParameter('schema') ?? ''),
+						credentials,
+					);
+					if (!schema) return [];
 					return await withHanaClient(
 						credentials,
 						async (session) => await loadTableFunctionOptions(session, credentials, schema),
@@ -2330,23 +2334,20 @@ export class HanaSecure implements INodeType {
 			async getTableFunctionParameters(
 				this: ILoadOptionsFunctions,
 			): Promise<INodePropertyOptions[]> {
-				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
-				const functionName = String(
-					this.getCurrentNodeParameter('functionName') ?? '',
-				).trim();
-				if (!schema || !functionName) return [];
+				const functionName = String(this.getCurrentNodeParameter('functionName') ?? '').trim();
+				if (!functionName) return [];
 				try {
 					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
 					validateGovernanceConfiguration(credentials);
+					const schema = schemaForEditor(
+						String(this.getCurrentNodeParameter('schema') ?? ''),
+						credentials,
+					);
+					if (!schema) return [];
 					return await withHanaClient(
 						credentials,
 						async (session) =>
-							await loadTableFunctionParameterOptions(
-								session,
-								credentials,
-								schema,
-								functionName,
-							),
+							await loadTableFunctionParameterOptions(session, credentials, schema, functionName),
 					);
 				} catch (error) {
 					throw new NodeOperationError(
@@ -2356,30 +2357,25 @@ export class HanaSecure implements INodeType {
 				}
 			},
 			async getColumns(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const schema = String(this.getCurrentNodeParameter('schema') ?? '').trim();
-				const sourceKind = String(
-					this.getCurrentNodeParameter('sourceKind') ?? 'tableOrView',
-				);
+				const sourceKind = String(this.getCurrentNodeParameter('sourceKind') ?? 'tableOrView');
 				const objectName = String(
 					this.getCurrentNodeParameter(
 						sourceKind === 'tableFunction' ? 'functionName' : 'objectName',
 					) ?? '',
 				).trim();
-				if (!schema || !objectName) return [];
+				if (!objectName) return [];
 				try {
 					const credentials = await this.getCredentials<HanaCredentials>('hanaSecureApi');
 					validateGovernanceConfiguration(credentials);
-					return await withHanaClient(
+					const schema = schemaForEditor(
+						String(this.getCurrentNodeParameter('schema') ?? ''),
 						credentials,
-						async (session) =>
-							sourceKind === 'tableFunction'
-								? await loadTableFunctionColumnOptions(
-										session,
-										credentials,
-										schema,
-										objectName,
-									)
-								: await loadColumnOptions(session, credentials, schema, objectName),
+					);
+					if (!schema) return [];
+					return await withHanaClient(credentials, async (session) =>
+						sourceKind === 'tableFunction'
+							? await loadTableFunctionColumnOptions(session, credentials, schema, objectName)
+							: await loadColumnOptions(session, credentials, schema, objectName),
 					);
 				} catch (error) {
 					throw new NodeOperationError(
@@ -2500,6 +2496,8 @@ export class HanaSecure implements INodeType {
 										]),
 									),
 									ADVANCED_SQL_ENABLED: credentials.allowAdvancedSql === true,
+									CONNECTION_PROFILE: credentials.connectionProfile ?? 'hanaPlatform',
+									DEFAULT_SCHEMA: credentials.defaultSchema?.trim() || null,
 									AI_TOOL_ENABLED: credentials.allowAiTool === true,
 									AI_CATALOG_DISCOVERY_ENABLED: credentials.allowAiCatalogDiscovery === true,
 									AI_MAX_ROWS: credentials.aiToolMaxRows ?? 100,

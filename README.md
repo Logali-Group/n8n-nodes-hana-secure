@@ -6,9 +6,11 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.7.1` is public on npm with provenance and installs by name on self-hosted n8n. The
-> connection, governed reads, table-function discovery, and parameterized ABAP CDS runtime
-> recognition have been verified against SAP HANA `2.00.088` on a non-production system.
+> Status: `0.8.0` is public on npm with provenance and installs by name on self-hosted n8n.
+> Version `0.9.0` is prepared locally and has not been published. The direct connection, governed
+> reads, table-function discovery, and parameterized ABAP CDS runtime recognition have been
+> verified against SAP HANA `2.00.088` on a non-production system. The new HANA Cloud / HDI
+> profile still requires an end-to-end test against a real HANA Cloud SQL endpoint before release.
 
 ## Why this node exists
 
@@ -132,12 +134,12 @@ Copy the tarball to the Docker host and replace `<n8n-container>` with the devel
 name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.7.1.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.9.0.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.7.1.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.0.tgz
 exit
 
 docker restart <n8n-container>
@@ -168,14 +170,16 @@ Create a **Logali HANA Guard API** credential with:
 
 | Field                        | Purpose                                                                                          |
 | ---------------------------- | ------------------------------------------------------------------------------------------------ |
+| Connection Profile           | Direct HANA Platform connection or guided HANA Cloud / HDI setup                                 |
 | Host                         | HANA SQL endpoint hostname or IP address                                                         |
 | SQL Port                     | Tenant SQL endpoint port; SAP HANA Cloud normally uses TCP 443                                    |
-| Database Name                | Optional tenant database name; leave empty when the endpoint already targets the tenant SQL port |
+| Database Name                | Optional tenant database name or HDI `database_id` when the SQL endpoint requires it              |
+| Default Schema               | Optional fallback when a node leaves Schema empty; still checked against Allowed Schemas          |
 | SAP Client                   | Optional three-digit ABAP client; sets both `CLIENT` and `CDS_CLIENT` for client-dependent CDS    |
 | Ignore Server Topology       | Keeps NAT, forwarded, proxy, and managed endpoints on the configured host; enabled by default    |
 | Username / Password          | Dedicated technical user; never use a broad administrator                                        |
-| Use TLS                      | Encrypts the connection; enabled by default                                                      |
-| Validate TLS Certificate     | Rejects untrusted certificates; enabled by default                                               |
+| Use TLS                      | Encrypts the connection; mandatory for the HANA Cloud / HDI profile                              |
+| Validate TLS Certificate     | Rejects untrusted certificates; mandatory for the HANA Cloud / HDI profile                       |
 | Custom CA Certificate        | Optional PEM CA for a private certificate authority                                              |
 | Allowed Schemas              | Optional comma-separated schema allowlist                                                        |
 | Allowed Objects              | Optional comma- or line-separated exact `SCHEMA.OBJECT` allowlist                                |
@@ -189,6 +193,13 @@ Create a **Logali HANA Guard API** credential with:
 | Connection / Query Timeout   | Upper bounds for connection and query execution                                                  |
 
 Use **Test** in the credential dialog, or the node's **Connection → Test Connection** operation.
+
+For an HDI service key, choose **SAP HANA Cloud / HDI** and copy only its individual connection
+values into the credential: SQL `host`, `port`, `user`, `password`, optional `database_id`, and
+`schema` as **Default Schema**. Do not paste or retain the complete service-key JSON in n8n. This
+profile fails closed unless both TLS and server-certificate validation are enabled. It changes
+onboarding only: the same read-only operations, allowlists, prepared values, limits, and database
+grants remain in force.
 
 For NAT or port-forwarded laboratory endpoints, leave **Database Name** empty when the published
 port already targets the tenant and keep **Ignore Server Topology** enabled. Pre-release `0.1.6`
@@ -263,7 +274,9 @@ user or database administrator account into n8n.
 
 Schema, object, filter-column, sort-column, cursor-column, aggregate-column, and key-column fields
 load their choices from HANA. The choices apply the same schema, object, and column policies as
-execution, so the editor does not advertise objects the credential is not allowed to use.
+execution, so the editor does not advertise objects the credential is not allowed to use. When
+**Default Schema** is configured, it appears first in the schema list and is used only when the
+node's Schema field is empty; an explicit node value always wins.
 
 ### Row
 

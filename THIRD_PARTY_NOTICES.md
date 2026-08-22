@@ -2,7 +2,7 @@
 
 ## hdb
 
-This package bundles `hdb` version `2.29.5`, a pure-JavaScript SAP HANA client.
+This package bundles `hdb` version `2.27.1`, a pure-JavaScript SAP HANA client.
 
 - Project: `https://github.com/SAP/node-hdb`
 - License: Apache License 2.0

@@ -1,7 +1,11 @@
+export type HanaConnectionProfile = 'hanaPlatform' | 'hanaCloudHdi';
+
 export interface HanaCredentials {
+	connectionProfile?: HanaConnectionProfile;
 	host: string;
 	port: number;
 	databaseName?: string;
+	defaultSchema?: string;
 	sapClient?: string;
 	ignoreTopology?: boolean;
 	user: string;

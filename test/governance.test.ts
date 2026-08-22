@@ -9,6 +9,7 @@ import {
 	parseColumnPolicies,
 	parseRequiredFilterPolicies,
 	requiredFiltersForObject,
+	resolveSchemaName,
 	validateGovernanceConfiguration,
 } from '../nodes/HanaSecure/governance';
 
@@ -26,6 +27,42 @@ describe('object governance', () => {
 	it('rejects malformed object references', () => {
 		assert.throws(() => parseAllowedObjects('TRAINING'), /SCHEMA\.OBJECT/);
 		assert.throws(() => parseAllowedObjects('TRAINING.GL.ITEMS'), /SCHEMA\.OBJECT/);
+	});
+});
+
+describe('default schema governance', () => {
+	const base = {
+		host: 'hana.example.com',
+		port: 30015,
+		user: 'READ_ONLY',
+		password: 'not-a-real-secret',
+		useTLS: true,
+		rejectUnauthorized: true,
+		allowAdvancedSql: false,
+		connectionTimeout: 15000,
+		queryTimeout: 30000,
+		allowedSchemas: 'TRAINING,REPORTING',
+		defaultSchema: 'TRAINING',
+	};
+
+	it('uses the credential default only when the node schema is empty', () => {
+		assert.equal(resolveSchemaName('', base), 'TRAINING');
+		assert.equal(resolveSchemaName('REPORTING', base), 'REPORTING');
+	});
+
+	it('rejects missing, unsafe, and disallowed default schemas', () => {
+		assert.throws(
+			() => resolveSchemaName('', { ...base, defaultSchema: '' }),
+			/Schema is required/,
+		);
+		assert.throws(
+			() => validateGovernanceConfiguration({ ...base, defaultSchema: 'TRAINING; DROP USER X' }),
+			/Invalid schema/,
+		);
+		assert.throws(
+			() => validateGovernanceConfiguration({ ...base, defaultSchema: 'SECRET' }),
+			/not allowed by these credentials/,
+		);
 	});
 });
 

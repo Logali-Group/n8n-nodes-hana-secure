@@ -8,6 +8,7 @@ import {
 	loadTableFunctionColumnOptions,
 	loadTableFunctionOptions,
 	loadTableFunctionParameterOptions,
+	schemaForEditor,
 } from '../nodes/HanaSecure/catalogOptions';
 import type { HanaSession } from '../nodes/HanaSecure/hanaClient';
 import type { HanaCredentials } from '../nodes/HanaSecure/types';
@@ -35,6 +36,33 @@ describe('dynamic governed catalog options', () => {
 			{ ...baseCredentials, allowedSchemas: 'TRAINING' },
 		);
 		assert.deepEqual(options, [{ name: 'TRAINING', value: 'TRAINING' }]);
+	});
+
+	it('prioritizes and labels the credential default schema', async () => {
+		const options = await loadSchemaOptions(
+			sessionWithRows([{ SCHEMA_NAME: 'REPORTING' }, { SCHEMA_NAME: 'TRAINING' }]),
+			{
+				...baseCredentials,
+				allowedSchemas: 'TRAINING,REPORTING',
+				defaultSchema: 'training',
+			},
+		);
+		assert.deepEqual(options, [
+			{ name: 'TRAINING (credential default)', value: 'TRAINING' },
+			{ name: 'REPORTING', value: 'REPORTING' },
+		]);
+	});
+
+	it('resolves editor dependencies through the default schema', () => {
+		assert.equal(
+			schemaForEditor('', {
+				...baseCredentials,
+				allowedSchemas: 'TRAINING',
+				defaultSchema: 'TRAINING',
+			}),
+			'TRAINING',
+		);
+		assert.equal(schemaForEditor('', baseCredentials), undefined);
 	});
 
 	it('returns only approved objects', async () => {
