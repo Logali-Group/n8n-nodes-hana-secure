@@ -6,11 +6,12 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.9.1` is the current public npm release with provenance and installs by name on
+> Status: `0.9.3` is the current public npm release with provenance and installs by name on
 > self-hosted n8n. The direct connection, governed reads, table-function discovery, and
 > parameterized ABAP CDS runtime recognition have been verified against SAP HANA `2.00.088` on a
-> non-production system. The HANA Cloud / HDI onboarding, TLS gate, and schema fallback are
-> unit-tested; an end-to-end test against a real HANA Cloud SQL endpoint remains pending.
+> non-production system. The HANA Cloud / HDI profile, strict TLS gate, generated-schema catalog
+> discovery, object allowlist, column policy, and structured count read were also verified end to
+> end against a real non-production SAP HANA Cloud free-tier instance and HDI container.
 
 ## Why this node exists
 
@@ -134,12 +135,12 @@ Copy the tarball to the Docker host and replace `<n8n-container>` with the devel
 name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.9.1.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.9.3.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.1.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.3.tgz
 exit
 
 docker restart <n8n-container>
@@ -173,7 +174,7 @@ Create a **Logali HANA Guard API** credential with:
 | Connection Profile           | Direct HANA Platform connection or guided HANA Cloud / HDI setup                                 |
 | Host                         | HANA SQL endpoint hostname or IP address                                                         |
 | SQL Port                     | Tenant SQL endpoint port; SAP HANA Cloud normally uses TCP 443                                    |
-| Database Name                | Optional tenant database name or HDI `database_id` when the SQL endpoint requires it              |
+| Database Name                | Optional SQL tenant name; leave empty for a standard HDI service key                              |
 | Default Schema               | Optional fallback when a node leaves Schema empty; still checked against Allowed Schemas          |
 | SAP Client                   | Optional three-digit ABAP client; sets both `CLIENT` and `CDS_CLIENT` for client-dependent CDS    |
 | Ignore Server Topology       | Keeps NAT, forwarded, proxy, and managed endpoints on the configured host; enabled by default    |
@@ -195,11 +196,13 @@ Create a **Logali HANA Guard API** credential with:
 Use **Test** in the credential dialog, or the node's **Connection → Test Connection** operation.
 
 For an HDI service key, choose **SAP HANA Cloud / HDI** and copy only its individual connection
-values into the credential: SQL `host`, `port`, `user`, `password`, optional `database_id`, and
-`schema` as **Default Schema**. Do not paste or retain the complete service-key JSON in n8n. This
-profile fails closed unless both TLS and server-certificate validation are enabled. It changes
-onboarding only: the same read-only operations, allowlists, prepared values, limits, and database
-grants remain in force.
+values into the credential: SQL `host`, `port`, `user`, `password`, `certificate`, and `schema` as
+**Default Schema**. Leave **Database Name** empty for a standard HDI service key: `database_id`
+identifies the managed HANA Cloud instance and is not the SQL database name expected by the
+driver. Do not paste or retain the complete service-key JSON in n8n. This profile fails closed
+unless both TLS and server-certificate validation are enabled. It changes onboarding only: the
+same read-only operations, allowlists, prepared values, limits, and database grants remain in
+force.
 
 For NAT or port-forwarded laboratory endpoints, leave **Database Name** empty when the published
 port already targets the tenant and keep **Ignore Server Topology** enabled. Pre-release `0.1.6`

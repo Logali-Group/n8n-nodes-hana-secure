@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.3] - 2026-08-22
+
+### Fixed
+
+- Accept generated SAP HDI container schemas that begin with a digit while continuing to reject
+  separators, quotes, whitespace, and other characters that could alter SQL structure.
+- Add regression coverage for digit-prefixed HDI schema allowlists, defaults, and quoted SQL
+  identifiers discovered during acceptance against a real SAP HANA Cloud container.
+- Correct the HDI credential guidance so service-key `database_id` is not entered as the SQL
+  Database Name; standard HDI credentials leave that optional field empty.
+
 ## [0.9.2] - 2026-08-22
 
 ### Changed

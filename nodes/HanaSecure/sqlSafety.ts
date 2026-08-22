@@ -2,7 +2,11 @@ import { OperationalError } from 'n8n-workflow';
 
 import type { Filter, FilterLogic, FilterValueType, OrderBy, UiFilter, UiKeyField } from './types';
 
-const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$#]*$/;
+// HDI container schemas are generated as hexadecimal identifiers and may begin
+// with a digit. Every accepted identifier is still emitted as a delimited HANA
+// identifier by quoteIdentifier(), so allowing that leading digit does not
+// permit SQL structure to escape the quoted identifier.
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_$#]*$/;
 const FORBIDDEN_SQL_KEYWORDS = [
 	'ALTER',
 	'BACKUP',
@@ -38,7 +42,7 @@ export function assertIdentifier(identifier: string, label = 'identifier'): stri
 	const value = identifier.trim();
 	if (!IDENTIFIER_PATTERN.test(value)) {
 		throw new Error(
-			`Invalid ${label}. Use letters, numbers, underscore, dollar sign, or hash, and do not start with a number.`,
+			`Invalid ${label}. Use only letters, numbers, underscore, dollar sign, or hash.`,
 		);
 	}
 	return value;

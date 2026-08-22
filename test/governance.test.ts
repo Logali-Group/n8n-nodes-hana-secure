@@ -50,6 +50,19 @@ describe('default schema governance', () => {
 		assert.equal(resolveSchemaName('REPORTING', base), 'REPORTING');
 	});
 
+	it('resolves a generated HDI schema that begins with a digit', () => {
+		const schema = '1234567890ABCDEF1234567890ABCDEF';
+		const hdiCredentials = {
+			...base,
+			connectionProfile: 'hanaCloudHdi',
+			allowedSchemas: schema,
+			defaultSchema: schema,
+		};
+
+		assert.equal(resolveSchemaName('', hdiCredentials), schema);
+		assert.doesNotThrow(() => validateGovernanceConfiguration(hdiCredentials));
+	});
+
 	it('rejects missing, unsafe, and disallowed default schemas', () => {
 		assert.throws(
 			() => resolveSchemaName('', { ...base, defaultSchema: '' }),
