@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] - 2026-08-22
+
+### Added
+
+- Add explicit **SAP HANA Platform / Direct** and **SAP HANA Cloud / HDI** connection profiles.
+- Add an optional credential-level **Default Schema** used when a node leaves its Schema field
+  empty, while keeping explicit node configuration as the higher-priority value.
+- Guide HDI users to map the individual SQL endpoint, user, password, database ID, and schema
+  values from a service key without storing the complete service-key JSON.
+- Prioritize and label the credential default in dynamic schema choices.
+
+### Security
+
+- Require TLS and server-certificate validation for the SAP HANA Cloud / HDI profile before any
+  connection is opened.
+- Validate the default schema as a HANA identifier and against **Allowed Schemas**.
+- Resolve the schema locally for every governed operation; the node does not issue `SET SCHEMA`.
+
+### Fixed
+
+- Synchronize the README release references and the bundled `hdb` third-party notice with the
+  package manifest.
+- Update the development dependency tree to patched compatible resolutions where available.
+
+### Changed
+
+- Update the official n8n node toolchain to `@n8n/node-cli@0.45.3` and
+  `release-it@20.2.1`, the newest compatible release line for the repository's current Node.js
+  runtime.
+
 ## [0.8.0] - 2026-08-20
 
 ### Added

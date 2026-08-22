@@ -12,6 +12,37 @@ export class HanaSecureApi implements ICredentialType {
 
 	properties: INodeProperties[] = [
 		{
+			displayName: 'Connection Profile',
+			name: 'connectionProfile',
+			type: 'options',
+			options: [
+				{
+					name: 'SAP HANA Cloud / HDI',
+					value: 'hanaCloudHdi',
+					description:
+						'Use a HANA Cloud SQL endpoint and the individual values from an HDI service key',
+				},
+				{
+					name: 'SAP HANA Platform / Direct',
+					value: 'hanaPlatform',
+					description: 'Use a directly reachable tenant database SQL endpoint',
+				},
+			],
+			default: 'hanaPlatform',
+			description:
+				'Guides connection setup without changing the governed read-only execution contract',
+		},
+		{
+			displayName: 'HANA Cloud / HDI Setup',
+			name: 'hanaCloudHdiNotice',
+			type: 'notice',
+			default: '',
+			typeOptions: { theme: 'info' },
+			displayOptions: { show: { connectionProfile: ['hanaCloudHdi'] } },
+			description:
+				'Copy host, port, user, password, database_id, and schema from the service key into their separate credential fields. Do not paste or store the complete service key JSON. HANA Cloud normally uses SQL over TLS on TCP port 443.',
+		},
+		{
 			displayName: 'Host',
 			name: 'host',
 			type: 'string',
@@ -35,7 +66,17 @@ export class HanaSecureApi implements ICredentialType {
 			type: 'string',
 			default: '',
 			placeholder: 'HDB',
-			description: 'Optional tenant database name',
+			description:
+				'Optional tenant database name. For HDI, use database_id only when the SQL endpoint requires it.',
+		},
+		{
+			displayName: 'Default Schema',
+			name: 'defaultSchema',
+			type: 'string',
+			default: '',
+			placeholder: 'TRAINING',
+			description:
+				'Optional schema used when a node leaves Schema empty. It must be a valid identifier and belong to Allowed Schemas when that allowlist is configured.',
 		},
 		{
 			displayName: 'SAP Client',

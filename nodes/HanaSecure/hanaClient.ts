@@ -1,7 +1,7 @@
 import { createClient, type Client, type ClientOptions, type Statement } from 'hdb';
 
 import { toSafeHanaError } from './errors';
-import type { HanaCredentials } from './types';
+import type { HanaConnectionProfile, HanaCredentials } from './types';
 
 export interface HanaSession {
 	query(sql: string, parameters?: unknown[]): Promise<Record<string, unknown>[]>;
@@ -88,7 +88,31 @@ export function normalizeSapClient(value?: string): string | undefined {
 	return client;
 }
 
+export function normalizeConnectionProfile(value?: string): HanaConnectionProfile {
+	const profile = value?.trim() || 'hanaPlatform';
+	if (profile !== 'hanaPlatform' && profile !== 'hanaCloudHdi') {
+		throw new Error(
+			'Connection Profile must be SAP HANA Platform / Direct or SAP HANA Cloud / HDI.',
+		);
+	}
+	return profile;
+}
+
+export function validateConnectionProfile(credentials: HanaCredentials): HanaConnectionProfile {
+	const profile = normalizeConnectionProfile(credentials.connectionProfile);
+	if (profile === 'hanaCloudHdi' && credentials.useTLS !== true) {
+		throw new Error('SAP HANA Cloud / HDI credentials require TLS. Enable Use TLS.');
+	}
+	if (profile === 'hanaCloudHdi' && credentials.rejectUnauthorized !== true) {
+		throw new Error(
+			'SAP HANA Cloud / HDI credentials require certificate validation. Enable Validate TLS Certificate.',
+		);
+	}
+	return profile;
+}
+
 export function createClientOptions(credentials: HanaCredentials): ClientOptions {
+	validateConnectionProfile(credentials);
 	const sapClient = normalizeSapClient(credentials.sapClient);
 	const options: ClientOptions = {
 		host: credentials.host,

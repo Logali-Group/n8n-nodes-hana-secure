@@ -7,6 +7,7 @@ import {
 	isObjectAllowed,
 	parseAllowedObjects,
 	parseColumnPolicies,
+	resolveSchemaName,
 } from './governance';
 import type { HanaSession } from './hanaClient';
 import { assertIdentifier, assertSchemaAllowed, parseAllowedSchemas } from './sqlSafety';
@@ -85,6 +86,7 @@ WHERE "SCHEMA_NAME" <> 'SYS' AND "SCHEMA_NAME" NOT LIKE '\\_SYS\\_%' ESCAPE '\\'
 ORDER BY "SCHEMA_NAME"`,
 	);
 
+	const defaultSchema = credentials.defaultSchema?.trim().toUpperCase();
 	return rows
 		.filter((row) => {
 			const schema = String(row.SCHEMA_NAME);
@@ -93,8 +95,30 @@ ORDER BY "SCHEMA_NAME"`,
 			const prefix = `${schema.toUpperCase()}.`;
 			return [...allowedObjects].some((reference) => reference.startsWith(prefix));
 		})
+		.sort((left, right) => {
+			const leftIsDefault = String(left.SCHEMA_NAME).toUpperCase() === defaultSchema;
+			const rightIsDefault = String(right.SCHEMA_NAME).toUpperCase() === defaultSchema;
+			if (leftIsDefault === rightIsDefault) {
+				return String(left.SCHEMA_NAME).localeCompare(String(right.SCHEMA_NAME));
+			}
+			return leftIsDefault ? -1 : 1;
+		})
 		.slice(0, MAX_DYNAMIC_OPTIONS)
-		.map((row) => ({ name: String(row.SCHEMA_NAME), value: String(row.SCHEMA_NAME) }));
+		.map((row) => {
+			const schema = String(row.SCHEMA_NAME);
+			return {
+				name: schema.toUpperCase() === defaultSchema ? `${schema} (credential default)` : schema,
+				value: schema,
+			};
+		});
+}
+
+export function schemaForEditor(
+	rawSchema: string | undefined,
+	credentials: HanaCredentials,
+): string | undefined {
+	if (!rawSchema?.trim() && !credentials.defaultSchema?.trim()) return undefined;
+	return resolveSchemaName(rawSchema, credentials);
 }
 
 export async function loadObjectOptions(

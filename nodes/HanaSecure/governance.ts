@@ -1,5 +1,5 @@
 import type { Filter, FilterOperator, HanaCredentials } from './types';
-import { assertIdentifier, parseAllowedSchemas } from './sqlSafety';
+import { assertIdentifier, assertSchemaAllowed, parseAllowedSchemas } from './sqlSafety';
 
 const MAX_POLICY_OBJECTS = 1000;
 const MAX_POLICY_COLUMNS_PER_OBJECT = 1000;
@@ -216,12 +216,30 @@ export function hasStructuredGovernance(credentials: HanaCredentials): boolean {
 	);
 }
 
+export function resolveSchemaName(
+	requestedSchema: string | undefined,
+	credentials: HanaCredentials,
+): string {
+	const requested = requestedSchema?.trim();
+	const fallback = credentials.defaultSchema?.trim();
+	const schema = requested || fallback;
+	if (!schema) {
+		throw new Error(
+			'Schema is required. Select one in the node or configure Default Schema in the credential.',
+		);
+	}
+	return assertSchemaAllowed(schema, parseAllowedSchemas(credentials.allowedSchemas));
+}
+
 export function validateGovernanceConfiguration(credentials: HanaCredentials): void {
 	const allowedSchemas = parseAllowedSchemas(credentials.allowedSchemas);
 	const allowedObjects = parseAllowedObjects(credentials.allowedObjects);
 	const columnPolicies = parseColumnPolicies(credentials.columnPoliciesJson);
 	const requiredFilterPolicies = parseRequiredFilterPolicies(credentials.requiredFiltersJson);
 	const governedReferences = new Set([...columnPolicies.keys(), ...requiredFilterPolicies.keys()]);
+	if (credentials.defaultSchema?.trim()) {
+		assertSchemaAllowed(credentials.defaultSchema, allowedSchemas);
+	}
 
 	for (const reference of allowedObjects) {
 		const [schema] = reference.split('.');

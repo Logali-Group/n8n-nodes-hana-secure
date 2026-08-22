@@ -7,8 +7,10 @@ import {
 	closeClient,
 	connectClient,
 	createClientOptions,
+	normalizeConnectionProfile,
 	normalizeSapClient,
 	queryFingerprint,
+	validateConnectionProfile,
 } from '../nodes/HanaSecure/hanaClient';
 import type { HanaCredentials } from '../nodes/HanaSecure/types';
 
@@ -27,6 +29,28 @@ const credentials: HanaCredentials = {
 };
 
 describe('HANA client connection options', () => {
+	it('keeps legacy credentials on the direct HANA profile', () => {
+		assert.equal(normalizeConnectionProfile(undefined), 'hanaPlatform');
+		assert.equal(validateConnectionProfile(credentials), 'hanaPlatform');
+	});
+
+	it('requires strict TLS for the HANA Cloud and HDI profile', () => {
+		const cloudCredentials = { ...credentials, connectionProfile: 'hanaCloudHdi' as const };
+		assert.equal(validateConnectionProfile(cloudCredentials), 'hanaCloudHdi');
+		assert.throws(
+			() => validateConnectionProfile({ ...cloudCredentials, useTLS: false }),
+			/HANA Cloud \/ HDI credentials require TLS/,
+		);
+		assert.throws(
+			() => validateConnectionProfile({ ...cloudCredentials, rejectUnauthorized: false }),
+			/require certificate validation/,
+		);
+	});
+
+	it('rejects unknown connection profiles before opening a connection', () => {
+		assert.throws(() => normalizeConnectionProfile('future-profile'), /Connection Profile must be/);
+	});
+
 	it('fingerprints SQL structure without requiring query values', () => {
 		assert.equal(
 			queryFingerprint('SELECT  *\nFROM "TRAINING"."ITEMS"'),
