@@ -20,10 +20,14 @@ describe('identifier safety', () => {
 	it('quotes valid HANA identifiers', () => {
 		assert.equal(quoteIdentifier('Company_Code'), '"Company_Code"');
 		assert.equal(assertIdentifier('_SYS_BIC'), '_SYS_BIC');
+		assert.equal(
+			quoteIdentifier('1234567890ABCDEF1234567890ABCDEF'),
+			'"1234567890ABCDEF1234567890ABCDEF"',
+		);
 	});
 
 	it('rejects identifiers that could change SQL structure', () => {
-		for (const value of ['A.B', 'A B', 'A"; DROP TABLE X', '1TABLE', '']) {
+		for (const value of ['A.B', 'A B', 'A"; DROP TABLE X', 'A-B', '']) {
 			assert.throws(() => assertIdentifier(value), /Invalid identifier/);
 		}
 	});
@@ -38,6 +42,12 @@ describe('schema allowlist', () => {
 		const allowlist = parseAllowedSchemas('training, Reporting');
 		assert.deepEqual(allowlist, ['TRAINING', 'REPORTING']);
 		assert.equal(assertSchemaAllowed('Training', allowlist), 'Training');
+	});
+
+	it('accepts generated HDI schemas that begin with a digit', () => {
+		const schema = '1234567890ABCDEF1234567890ABCDEF';
+		assert.deepEqual(parseAllowedSchemas(schema), [schema]);
+		assert.equal(assertSchemaAllowed(schema, [schema]), schema);
 	});
 
 	it('blocks schemas outside the allowlist', () => {

@@ -40,7 +40,7 @@ export class HanaSecureApi implements ICredentialType {
 			typeOptions: { theme: 'info' },
 			displayOptions: { show: { connectionProfile: ['hanaCloudHdi'] } },
 			description:
-				'Copy host, port, user, password, database_id, and schema from the service key into their separate credential fields. Do not paste or store the complete service key JSON. HANA Cloud normally uses SQL over TLS on TCP port 443.',
+				'Copy host, port, user, password, certificate, and schema from the service key into their separate credential fields. Leave Database Name empty for a standard HDI service key: database_id identifies the managed instance and is not the SQL database name. Do not paste or store the complete service key JSON. HANA Cloud normally uses SQL over TLS on TCP port 443.',
 		},
 		{
 			displayName: 'Host',
@@ -67,7 +67,7 @@ export class HanaSecureApi implements ICredentialType {
 			default: '',
 			placeholder: 'HDB',
 			description:
-				'Optional tenant database name. For HDI, use database_id only when the SQL endpoint requires it.',
+				'Optional SQL tenant database name. Leave empty for a standard HDI service key; its database_id identifies the managed instance and is not an SQL database name.',
 		},
 		{
 			displayName: 'Default Schema',
