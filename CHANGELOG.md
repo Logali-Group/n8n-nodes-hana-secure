@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] - 2026-08-22
+
+### Fixed
+
+- Correct the packaged README after the `0.9.0` publication so npm no longer describes the
+  current release as an unpublished local candidate.
+- Update the Docker test-tarball examples to the current patch version.
+
 ## [0.9.0] - 2026-08-22
 
 ### Added
