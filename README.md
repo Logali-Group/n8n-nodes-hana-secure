@@ -6,11 +6,11 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.8.0` is public on npm with provenance and installs by name on self-hosted n8n.
-> Version `0.9.0` is prepared locally and has not been published. The direct connection, governed
-> reads, table-function discovery, and parameterized ABAP CDS runtime recognition have been
-> verified against SAP HANA `2.00.088` on a non-production system. The new HANA Cloud / HDI
-> profile still requires an end-to-end test against a real HANA Cloud SQL endpoint before release.
+> Status: `0.9.1` is the current public npm release with provenance and installs by name on
+> self-hosted n8n. The direct connection, governed reads, table-function discovery, and
+> parameterized ABAP CDS runtime recognition have been verified against SAP HANA `2.00.088` on a
+> non-production system. The HANA Cloud / HDI onboarding, TLS gate, and schema fallback are
+> unit-tested; an end-to-end test against a real HANA Cloud SQL endpoint remains pending.
 
 ## Why this node exists
 
@@ -134,12 +134,12 @@ Copy the tarball to the Docker host and replace `<n8n-container>` with the devel
 name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.9.0.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.9.1.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.0.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.1.tgz
 exit
 
 docker restart <n8n-container>
