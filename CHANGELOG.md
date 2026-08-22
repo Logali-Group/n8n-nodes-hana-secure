@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.2] - 2026-08-22
+
+### Changed
+
+- Adopt the approved high-resolution Logali Guard family artwork for the HANA node and credential.
+- Use a new versioned PNG asset so n8n and browser caches cannot retain earlier artwork.
+- Keep all HANA operations, policies, credentials, and workflow compatibility unchanged.
+
 ## [0.9.1] - 2026-08-22
 
 ### Fixed

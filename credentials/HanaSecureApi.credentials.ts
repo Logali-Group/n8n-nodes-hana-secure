@@ -5,7 +5,7 @@ export class HanaSecureApi implements ICredentialType {
 
 	displayName = 'Logali HANA Guard API';
 
-	icon = 'file:logaliHanaGuardCredential-v023.svg' as const;
+	icon = 'file:logaliHanaGuardCredential-v092.svg' as const;
 
 	documentationUrl =
 		'https://github.com/Logali-Group/n8n-nodes-hana-secure#credential-configuration';
