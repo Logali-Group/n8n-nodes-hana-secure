@@ -1409,7 +1409,32 @@ export class HanaSecure implements INodeType {
 				required: true,
 				description:
 					'Approved table or view. The list is filtered by Allowed Objects when configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
-				displayOptions: { show: { resource: ['rows'], sourceKind: ['tableOrView'] } },
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { lte: 1.3 } }],
+						resource: ['rows'],
+					},
+				},
+			},
+			{
+				displayName: 'Table or View Name or ID',
+				name: 'objectName',
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getObjects',
+					loadOptionsDependsOn: ['schema'],
+				},
+				default: '',
+				required: true,
+				description:
+					'Approved table or view. The list is filtered by Allowed Objects when configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+				displayOptions: {
+					show: {
+						'@version': [{ _cnd: { gte: 1.4 } }],
+						resource: ['rows'],
+						sourceKind: ['tableOrView'],
+					},
+				},
 			},
 			{
 				displayName: 'Table Function / Parameterized CDS Name or ID',
