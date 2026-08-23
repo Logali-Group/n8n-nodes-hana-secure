@@ -126,6 +126,36 @@ describe('dynamic governed catalog options', () => {
 		]);
 	});
 
+	it('loads ordinary table columns without projecting a nonexistent virtual-column position', async () => {
+		let query = '';
+		const options = await loadColumnOptions(
+			{
+				query: async (sql) => {
+					query = sql;
+					return [{ COLUMN_NAME: 'ORDER_ID', DATA_TYPE_NAME: 'NVARCHAR', POSITION: 1 }];
+				},
+			},
+			{
+				...baseCredentials,
+				allowedSchemas: 'TRAINING',
+				allowedObjects: 'TRAINING.ORDERS',
+			},
+			'TRAINING',
+			'ORDERS',
+		);
+
+		assert.doesNotMatch(
+			query,
+			/SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"\s+FROM "SYS"\."VIRTUAL_COLUMNS"/,
+		);
+		assert.match(
+			query,
+			/SELECT "COLUMN_NAME", "DATA_TYPE_NAME", 0 AS "POSITION"\s+FROM "SYS"\."VIRTUAL_COLUMNS"/,
+		);
+		assert.match(query, /ORDER BY "POSITION", "COLUMN_NAME"/);
+		assert.deepEqual(options, [{ name: 'ORDER_ID (NVARCHAR)', value: 'ORDER_ID' }]);
+	});
+
 	it('discovers only governed table functions', async () => {
 		const options = await loadTableFunctionOptions(
 			sessionWithRows([

@@ -200,9 +200,9 @@ UNION ALL
 SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"
 FROM "SYS"."VIEW_COLUMNS" WHERE "SCHEMA_NAME" = ? AND "VIEW_NAME" = ?
 UNION ALL
-SELECT "COLUMN_NAME", "DATA_TYPE_NAME", "POSITION"
+SELECT "COLUMN_NAME", "DATA_TYPE_NAME", 0 AS "POSITION"
 FROM "SYS"."VIRTUAL_COLUMNS" WHERE "SCHEMA_NAME" = ? AND "TABLE_NAME" = ?
-ORDER BY "POSITION"`,
+ORDER BY "POSITION", "COLUMN_NAME"`,
 		[schema, objectName, schema, objectName, schema, objectName],
 	);
 	const allowedColumns = allowedColumnsForObject(schema, objectName, columnPolicies);

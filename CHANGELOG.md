@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.4] - 2026-08-23
+
+### Fixed
+
+- Stop projecting the nonexistent `POSITION` field from the SAP HANA
+  `SYS.VIRTUAL_COLUMNS` system view when loading governed column choices.
+- Keep real table and view ordinals while giving virtual-table columns a stable alphabetical
+  fallback, so editor dropdowns load without a red `Error fetching options` state.
+- Add regression coverage for the exact catalog query used by the n8n editor.
+
 ## [0.9.3] - 2026-08-22
 
 ### Fixed
