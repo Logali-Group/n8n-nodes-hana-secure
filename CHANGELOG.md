@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.5] - 2026-08-23
+
+### Fixed
+
+- Restore the governed **Table or View Name or ID** selector for row nodes saved with node
+  versions `1` through `1.3`.
+- Keep the `Row Source`-dependent selector for node version `1.4`, where table functions are
+  available, without hiding the table/view already stored by older workflows.
+- Add regression coverage for both halves of the versioned editor contract.
+
 ## [0.9.4] - 2026-08-23
 
 ### Fixed
