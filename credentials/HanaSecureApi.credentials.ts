@@ -224,8 +224,9 @@ export class HanaSecureApi implements ICredentialType {
 			name: 'connectionTimeout',
 			type: 'number',
 			typeOptions: { minValue: 1000, maxValue: 120000 },
-			default: 15000,
-			description: 'Maximum time allowed to establish a database connection',
+			default: 60000,
+			description:
+				'Maximum time allowed to establish a database connection. Remote, TLS, and cold laboratory endpoints can require more than 15 seconds.',
 		},
 		{
 			displayName: 'Query Timeout (ms)',

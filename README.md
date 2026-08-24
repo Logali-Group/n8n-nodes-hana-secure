@@ -6,7 +6,7 @@
 Platform and SAP HANA Cloud. The package name stays descriptive and searchable; the node appears
 in n8n as **Logali HANA Guard**.
 
-> Status: `0.9.5` is the current public npm release with provenance and installs by name on
+> Status: `0.9.6` is the current public npm release with provenance and installs by name on
 > self-hosted n8n. The direct connection, governed reads, table-function discovery, and
 > parameterized ABAP CDS runtime recognition have been verified against SAP HANA `2.00.088` on a
 > non-production system. The HANA Cloud / HDI profile, strict TLS gate, generated-schema catalog
@@ -135,12 +135,12 @@ Copy the tarball to the Docker host and replace `<n8n-container>` with the devel
 name:
 
 ```bash
-docker cp n8n-nodes-hana-secure-0.9.5.tgz <n8n-container>:/tmp/
+docker cp n8n-nodes-hana-secure-0.9.6.tgz <n8n-container>:/tmp/
 
 docker exec -u node -it <n8n-container> sh
 mkdir -p /home/node/.n8n/nodes
 cd /home/node/.n8n/nodes
-npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.5.tgz
+npm install --omit=dev /tmp/n8n-nodes-hana-secure-0.9.6.tgz
 exit
 
 docker restart <n8n-container>
@@ -191,7 +191,7 @@ Create a **Logali HANA Guard API** credential with:
 | Allow AI Catalog Discovery   | Separate opt-in for schema, object, and column discovery; disabled by default                    |
 | AI Tool Row Limit            | Credential-level cap for each Tool call; 100 by default, maximum 1,000                           |
 | AI Tool Result Size Limit    | Serialized response cap; 256 KiB by default, maximum 5 MiB                                       |
-| Connection / Query Timeout   | Upper bounds for connection and query execution                                                  |
+| Connection / Query Timeout   | Upper bounds for connection and query execution; connection defaults to 60 seconds for remote TLS endpoints |
 
 Use **Test** in the credential dialog, or the node's **Connection → Test Connection** operation.
 
