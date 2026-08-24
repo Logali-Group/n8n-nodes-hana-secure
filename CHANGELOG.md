@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.6] - 2026-08-24
+
+### Fixed
+
+- Raise the default HANA connection timeout from 15 to 60 seconds so remote TLS and cold
+  laboratory endpoints do not report a false connection failure during their initial handshake.
+- Keep the timeout configurable between 1 and 120 seconds; existing credentials remain under
+  administrator control and can be updated without changing their secrets.
+
 ## [0.9.5] - 2026-08-23
 
 ### Fixed
