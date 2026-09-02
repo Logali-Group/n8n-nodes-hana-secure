@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.7] - 2026-09-02
+
+### Fixed
+
+- Add an explicit **Enter Name** mode for governed row sources so valid HANA tables and views
+  outside n8n's bounded 500-option editor list can be configured without a false unsupported-value
+  warning.
+- Keep **From List** as the default and enforce the same identifier, schema, object, column, and
+  required-filter policies for manually entered names at execution time.
+
 ## [0.9.6] - 2026-08-24
 
 ### Fixed

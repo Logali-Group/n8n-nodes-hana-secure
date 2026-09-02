@@ -27,5 +27,25 @@ describe('HANA Guard node description', () => {
 
 		assert.deepEqual(legacyShow?.['@version'], [{ _cnd: { lte: 1.3 } }]);
 		assert.deepEqual(currentShow?.['@version'], [{ _cnd: { gte: 1.4 } }]);
+		assert.deepEqual(currentShow?.objectNameMode, ['list']);
+	});
+
+	it('offers an exact-name fallback for row objects outside the bounded catalog list', () => {
+		const properties = new HanaSecure().description.properties;
+		const mode = properties.find((property) => property.name === 'objectNameMode');
+		const manualName = properties.find(
+			(property) =>
+				property.name === 'objectName' &&
+				property.displayName === 'Table or View Name' &&
+				property.type === 'string',
+		);
+
+		assert.equal(mode?.default, 'list');
+		assert.deepEqual(
+			mode?.options?.map((option) => ('value' in option ? option.value : undefined)),
+			['list', 'name'],
+		);
+		assert.deepEqual(manualName?.displayOptions?.show?.objectNameMode, ['name']);
+		assert.deepEqual(manualName?.displayOptions?.show?.sourceKind, ['tableOrView']);
 	});
 });
