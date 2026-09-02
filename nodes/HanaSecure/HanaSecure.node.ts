@@ -1328,8 +1328,37 @@ export class HanaSecure implements INodeType {
 				default: 'tableOrView',
 				description:
 					'Table functions are invoked with prepared scalar inputs, then queried through the same row governance controls',
+					displayOptions: {
+						show: { '@version': [{ _cnd: { gte: 1.4 } }], resource: ['rows'] },
+					},
+			},
+			{
+				displayName: 'Object Selection',
+				name: 'objectNameMode',
+				type: 'options',
+				noDataExpression: true,
+				options: [
+					{
+						name: 'From List',
+						value: 'list',
+						description: 'Choose from the governed objects loaded from the HANA catalog',
+					},
+					{
+						name: 'Enter Name',
+						value: 'name',
+						description:
+							'Enter an exact governed HANA object name when it is outside the bounded editor list',
+					},
+				],
+				default: 'list',
+				description:
+					'How to identify the table or view. Manual names receive the same identifier and credential-policy validation at execution time.',
 				displayOptions: {
-					show: { '@version': [{ _cnd: { gte: 1.4 } }], resource: ['rows'] },
+					show: {
+						'@version': [{ _cnd: { gte: 1.4 } }],
+						resource: ['rows'],
+						sourceKind: ['tableOrView'],
+					},
 				},
 			},
 			{
@@ -1428,11 +1457,30 @@ export class HanaSecure implements INodeType {
 				required: true,
 				description:
 					'Approved table or view. The list is filtered by Allowed Objects when configured. Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+					displayOptions: {
+						show: {
+							'@version': [{ _cnd: { gte: 1.4 } }],
+							resource: ['rows'],
+							sourceKind: ['tableOrView'],
+							objectNameMode: ['list'],
+						},
+					},
+			},
+			{
+				displayName: 'Table or View Name',
+				name: 'objectName',
+				type: 'string',
+				default: '',
+				required: true,
+				placeholder: 'RBKP',
+				description:
+					'Exact HANA table or view name. The identifier and credential allowlists are still enforced at execution time.',
 				displayOptions: {
 					show: {
 						'@version': [{ _cnd: { gte: 1.4 } }],
 						resource: ['rows'],
 						sourceKind: ['tableOrView'],
+						objectNameMode: ['name'],
 					},
 				},
 			},
